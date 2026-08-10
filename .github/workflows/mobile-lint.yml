@@ -19,6 +19,10 @@ on:
 permissions:
     contents: read
 
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
 env:
     RUSTFLAGS: -D warnings
 
@@ -31,13 +35,41 @@ jobs:
               with:
                   submodules: recursive
 
+            - name: Check whether lint-relevant files changed in this PR
+              uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+              id: filter
+              with:
+                  predicate-quantifier: 'some-with-excludes'
+                  filters: |
+                      code:
+                          - ".github/workflows/mobile-lint.yml"
+                          - "mobile/**"
+                          - "!mobile/native/**"
+                          - "!mobile/**/*.md"
+                          - "rust/apps/codegen/**"
+                          - "rust/bindings/frb/**"
+                          - "rust/Cargo.lock"
+                          - "rust/Cargo.toml"
+                          - "rust/crates/contacts/**"
+                          - "rust/crates/core/**"
+                          - "rust/crates/image/**"
+                          - "rust/crates/photos/**"
+                          - "!rust/**/*.md"
+
+            - name: Determine whether checks should run
+              id: gate
+              run: echo "run=${{ steps.filter.outputs.code == 'true' || github.event_name == 'workflow_dispatch' }}" >> "$GITHUB_OUTPUT"
+
             - name: Verify frozen mobile pubspecs
+              if: steps.gate.outputs.run == 'true'
               run: ruby mobile/scripts/check_frozen_pubspecs.rb mobile
 
             - name: Verify source ARB plurals
+              if: steps.gate.outputs.run == 'true'
               run: ruby mobile/scripts/check_source_arb_plurals.rb
 
             - name: Verify auth custom icons
+              if: steps.gate.outputs.run == 'true'
               run: |
                   find assets/custom-icons -type f -name "*.svg" | while read -r file; do
                       name=$(basename "$file")
@@ -67,35 +99,44 @@ jobs:
               working-directory: mobile/apps/auth
 
             - name: Install Flutter
+              if: steps.gate.outputs.run == 'true'
               uses: ./.github/actions/setup-flutter
 
             # Restore-only; primed on main by warm-caches.yml.
             - name: Restore Rust cache
+              if: steps.gate.outputs.run == 'true'
               uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
               with:
                   workspaces: rust
                   shared-key: rust-flutter
                   save-if: false
 
-            - run: cargo codegen frb
+            - if: steps.gate.outputs.run == 'true'
+              run: cargo codegen frb
               working-directory: rust
 
-            - run: cargo clippy -p ente_photos_rust --features flutter --all-targets --locked
+            - if: steps.gate.outputs.run == 'true'
+              run: cargo clippy -p ente_photos_rust --features flutter --all-targets --locked
               working-directory: rust
 
-            - run: cargo clippy -p ente_rust --features flutter --all-targets --locked
+            - if: steps.gate.outputs.run == 'true'
+              run: cargo clippy -p ente_rust --features flutter --all-targets --locked
               working-directory: rust
 
-            - run: flutter pub get --enforce-lockfile
+            - if: steps.gate.outputs.run == 'true'
+              run: flutter pub get --enforce-lockfile
               working-directory: mobile
 
-            - run: dart format --output=none --set-exit-if-changed .
+            - if: steps.gate.outputs.run == 'true'
+              run: dart format --output=none --set-exit-if-changed .
               working-directory: mobile
 
-            - run: flutter analyze --no-pub
+            - if: steps.gate.outputs.run == 'true'
+              run: flutter analyze --no-pub
               working-directory: mobile
 
             - name: Test
+              if: steps.gate.outputs.run == 'true'
               working-directory: mobile
               run: |
                   test_package() (
