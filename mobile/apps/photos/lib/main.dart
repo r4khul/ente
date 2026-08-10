@@ -132,6 +132,7 @@ Future<void> _runInForeground(
   components.ComponentTheme.configure(app: components.ComponentApp.photos);
   return await runWithLogs(() async {
     _logger.info("Starting app in foreground");
+    _logger.info("Lint check log");
     isProcessBg = false;
     final isPickerStartup =
         initialMediaExtensionAction.action == IntentAction.pick;
