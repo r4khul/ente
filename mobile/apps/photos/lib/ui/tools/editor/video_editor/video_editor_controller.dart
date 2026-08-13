@@ -23,6 +23,7 @@ class VideoEditorState {
     required this.maxCrop,
     required this.rotation,
     required this.preferredCropAspectRatio,
+    required this.volume,
   });
 
   final Duration startTrim;
@@ -31,6 +32,7 @@ class VideoEditorState {
   final Offset maxCrop;
   final int rotation;
   final double? preferredCropAspectRatio;
+  final double volume;
 }
 
 class VideoEditorController extends ChangeNotifier {
@@ -53,6 +55,7 @@ class VideoEditorController extends ChangeNotifier {
   Offset _maxCrop = const Offset(1, 1);
   int _rotation = 0;
   double? _preferredCropAspectRatio;
+  double _volume = 1.0;
 
   bool get initialized => _initialized;
   NativeVideoInfo get videoInfo => _videoInfo!;
@@ -68,6 +71,8 @@ class VideoEditorController extends ChangeNotifier {
   Offset get maxCrop => _maxCrop;
   int get rotation => _rotation;
   double? get preferredCropAspectRatio => _preferredCropAspectRatio;
+  double get volume => _volume;
+  bool get hasAudioEdits => _volume != 1.0;
 
   set preferredCropAspectRatio(double? ratio) {
     if (ratio != null && (!ratio.isFinite || ratio <= 0)) {
@@ -151,6 +156,12 @@ class VideoEditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void updateVolume(double volume) {
+    _volume = volume;
+    video.setVolume(volume);
+    notifyListeners();
+  }
+
   VideoEditorState snapshot() => VideoEditorState(
     startTrim: _startTrim,
     endTrim: _endTrim,
@@ -158,6 +169,7 @@ class VideoEditorController extends ChangeNotifier {
     maxCrop: _maxCrop,
     rotation: _rotation,
     preferredCropAspectRatio: _preferredCropAspectRatio,
+    volume: _volume,
   );
 
   void restore(VideoEditorState state) {
@@ -167,6 +179,8 @@ class VideoEditorController extends ChangeNotifier {
     _maxCrop = state.maxCrop;
     _rotation = state.rotation;
     _preferredCropAspectRatio = state.preferredCropAspectRatio;
+    _volume = state.volume;
+    video.setVolume(_volume);
     if (videoPosition < _startTrim || videoPosition > _endTrim) {
       unawaited(video.seekTo(_startTrim));
     }

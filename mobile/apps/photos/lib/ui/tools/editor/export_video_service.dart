@@ -53,6 +53,10 @@ class ExportService {
       '-map',
       '0:a?',
       if (filters.isNotEmpty) ...['-vf', filters.join(',')],
+      if (controller.hasAudioEdits) ...[
+        '-af',
+        'volume=${controller.volume.toStringAsFixed(4)}',
+      ],
       '-c:v',
       'libx264',
       '-preset',

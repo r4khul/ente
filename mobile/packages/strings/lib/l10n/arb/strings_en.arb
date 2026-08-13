@@ -4121,6 +4121,7 @@
   },
   "trashIsEmpty": "Trash is empty",
   "trim": "Trim",
+  "audio": "Audio",
   "tripInYear": "Trip in {year}",
   "@tripInYear": {
     "placeholders": {

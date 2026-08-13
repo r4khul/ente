@@ -5,6 +5,7 @@ import "dart:math";
 import "package:ente_pure_utils/ente_pure_utils.dart";
 import "package:ente_strings/ente_strings.dart";
 import 'package:flutter/material.dart';
+import "package:hugeicons/hugeicons.dart";
 import "package:logging/logging.dart";
 import 'package:native_video_editor/native_video_editor.dart';
 import 'package:path/path.dart' as path;
@@ -22,6 +23,7 @@ import "package:photos/ui/common/linear_progress_dialog.dart";
 import "package:photos/ui/notification/toast.dart";
 import "package:photos/ui/tools/editor/export_video_service.dart";
 import "package:photos/ui/tools/editor/native_video_export_service.dart";
+import "package:photos/ui/tools/editor/video_audio_page.dart";
 import 'package:photos/ui/tools/editor/video_crop_page.dart';
 import "package:photos/ui/tools/editor/video_crop_util.dart";
 import "package:photos/ui/tools/editor/video_editor/video_editor_app_bar.dart";
@@ -197,28 +199,30 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
                             children: [
                               VideoEditorBottomAction(
                                 label: context.strings.trim,
-                                svgPath:
-                                    "assets/video-editor/video-editor-trim-action.svg",
+                                hugeIcon: HugeIcons.strokeRoundedScissor,
                                 onPressed: () => _openSubEditor(
                                   VideoTrimPage(controller: _controller!),
                                 ),
                               ),
-                              const SizedBox(width: 24),
                               VideoEditorBottomAction(
                                 label: context.strings.crop,
-                                svgPath:
-                                    "assets/video-editor/video-editor-crop-action.svg",
+                                hugeIcon: HugeIcons.strokeRoundedCrop,
                                 onPressed: () => _openSubEditor(
                                   VideoCropPage(controller: _controller!),
                                 ),
                               ),
-                              const SizedBox(width: 24),
                               VideoEditorBottomAction(
                                 label: context.strings.rotate,
-                                svgPath:
-                                    "assets/video-editor/video-editor-rotate-action.svg",
+                                hugeIcon: HugeIcons.strokeRoundedScreenRotation,
                                 onPressed: () => _openSubEditor(
                                   VideoRotatePage(controller: _controller!),
+                                ),
+                              ),
+                              VideoEditorBottomAction(
+                                label: context.strings.audio,
+                                hugeIcon: HugeIcons.strokeRoundedVolumeHigh,
+                                onPressed: () => _openSubEditor(
+                                  VideoAudioPage(controller: _controller!),
                                 ),
                               ),
                             ],
@@ -283,7 +287,9 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     required bool shouldUseNative,
     required GlobalKey<LinearProgressDialogState> dialogKey,
   }) async {
-    if (shouldUseNative) {
+    final hasAudioEdits = _controller!.hasAudioEdits;
+
+    if (shouldUseNative && !hasAudioEdits) {
       try {
         return await _runNativeExportWithRetry(dialogKey: dialogKey);
       } catch (nativeError, stackTrace) {
@@ -312,6 +318,13 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
           nativeError,
           stackTrace,
         );
+      }
+    } else if (shouldUseNative && hasAudioEdits) {
+      _logger.info(
+        "Audio volume modified, falling back to FFmpeg export (natively unsupported).",
+      );
+      if (flagService.internalUser && mounted) {
+        showShortToast(context, "(i) Using FFmpeg for audio edits");
       }
     }
 
@@ -555,7 +568,7 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
       "trim={startMs:$startTrimMs, endMs:$endTrimMs, durationMs:$trimmedDurationMs, "
       "minMs:0, maxMs:$videoDurationMs, "
       "videoDurationMs:$videoDurationMs} "
-      "crop={$cropInfo}",
+      "crop={$cropInfo}, volume=${controller.volume.toStringAsFixed(2)}",
     );
   }
 
