@@ -1,0 +1,1 @@
+- Added audio volume control to the video editor. (@r4khul)

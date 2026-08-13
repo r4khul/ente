@@ -1,0 +1,1 @@
+- Updated video editor action icons to use standard HugeIcons. (@r4khul)
