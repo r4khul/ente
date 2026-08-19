@@ -52,6 +52,7 @@ class _VideoWidgetState extends State<VideoWidget> {
   PlaylistData? playlistData;
   final nativePlayerKey = GlobalKey();
   final mediaKitKey = GlobalKey();
+  final _playbackSpeed = ValueNotifier<double>(1.0);
 
   bool isPreviewLoadable = false;
 
@@ -87,6 +88,7 @@ class _VideoWidgetState extends State<VideoWidget> {
   @override
   void dispose() {
     useMediaKitForVideoSubscription.cancel();
+    _playbackSpeed.dispose();
     super.dispose();
   }
 
@@ -174,6 +176,7 @@ class _VideoWidgetState extends State<VideoWidget> {
         shouldDisableScroll: widget.shouldDisableScroll,
         playlistData: playlistData,
         selectedPreview: playPreview,
+        playbackSpeed: _playbackSpeed,
         isFromMemories: widget.isFromMemories,
         onStreamChange: () {
           setState(() {
@@ -199,6 +202,7 @@ class _VideoWidgetState extends State<VideoWidget> {
       shouldDisableScroll: widget.shouldDisableScroll,
       preview: playlistData?.preview,
       selectedPreview: playPreview,
+      playbackSpeed: _playbackSpeed,
       isFromMemories: widget.isFromMemories,
       onStreamChange: () {
         setState(() {
