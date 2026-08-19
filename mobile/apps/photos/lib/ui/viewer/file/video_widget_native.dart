@@ -34,6 +34,8 @@ import "package:photos/ui/viewer/file/native_video_player_controls/play_pause_bu
 import "package:photos/ui/viewer/file/native_video_player_controls/seek_bar.dart";
 import "package:photos/ui/viewer/file/thumbnail_widget.dart";
 import "package:photos/ui/viewer/file/video_control/gallery_video_controls.dart";
+import "package:photos/ui/viewer/file/video_control/video_speed_bottom_sheet.dart";
+import "package:photos/ui/viewer/file/video_control/video_speed_button.dart";
 import "package:photos/ui/viewer/file/video_stream_change.dart";
 import "package:photos/ui/viewer/file/zoomable_video_viewer.dart";
 import "package:photos/utils/dialog_util.dart";
@@ -92,6 +94,7 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
   StreamSubscription<DownloadTask>? downloadTaskSubscription;
   final _transformationController = TransformationController();
   bool _isZooming = false;
+  final _playbackSpeed = ValueNotifier<double>(1.0);
 
   @override
   void initState() {
@@ -172,6 +175,7 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
     if (!widget.isFromMemories) {
       await _controller?.setVolume(localSettings.isMuted() ? 0.0 : 1.0);
     }
+    await _controller?.setPlaybackSpeed(_playbackSpeed.value);
     await _controller?.play();
 
     Bus.instance.fire(SeekbarTriggeredEvent(position: 0));
@@ -270,6 +274,7 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
     _showControls.dispose();
     _isSeeking.removeListener(_seekListener);
     _isSeeking.dispose();
+    _playbackSpeed.dispose();
     _debouncer.cancelDebounceTimer();
     _transformationController.dispose();
     wakeLockService.updateWakeLock(
@@ -449,12 +454,40 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
                                     child: ValueListenableBuilder(
                                       valueListenable: _showControls,
                                       builder: (context, value, _) {
-                                        return VideoStreamChangeWidget(
-                                          showControls: value,
-                                          file: widget.file,
-                                          isPreviewPlayer:
-                                              widget.selectedPreview,
-                                          onStreamChange: widget.onStreamChange,
+                                        return Stack(
+                                          children: [
+                                            ValueListenableBuilder<double>(
+                                              valueListenable: _playbackSpeed,
+                                              builder: (context, speed, _) {
+                                                return VideoSpeedButton(
+                                                  showControls: value,
+                                                  playbackSpeed: speed,
+                                                  onTap: () {
+                                                    showVideoSpeedBottomSheet(
+                                                      context,
+                                                      currentSpeed: speed,
+                                                      onSpeedSelected: (newSpeed) {
+                                                        _playbackSpeed.value =
+                                                            newSpeed;
+                                                        _controller
+                                                            ?.setPlaybackSpeed(
+                                                              newSpeed,
+                                                            );
+                                                      },
+                                                    );
+                                                  },
+                                                );
+                                              },
+                                            ),
+                                            VideoStreamChangeWidget(
+                                              showControls: value,
+                                              file: widget.file,
+                                              isPreviewPlayer:
+                                                  widget.selectedPreview,
+                                              onStreamChange:
+                                                  widget.onStreamChange,
+                                            ),
+                                          ],
                                         );
                                       },
                                     ),
@@ -593,6 +626,7 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
     if (!widget.isFromMemories) {
       await _controller!.setVolume(localSettings.isMuted() ? 0.0 : 1.0);
     }
+    await _controller!.setPlaybackSpeed(_playbackSpeed.value);
     await _controller!.play();
     final durationInSeconds = durationToSeconds(duration) ?? 10;
     widget.onFinalFileLoad?.call(memoryDuration: durationInSeconds);
