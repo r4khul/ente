@@ -9,6 +9,7 @@ import "package:photos/models/file/file.dart";
 import "package:photos/states/detail_page_state.dart";
 import "package:photos/theme/colors.dart";
 import "package:photos/ui/viewer/file/video_control/gallery_video_controls.dart";
+import "package:photos/ui/viewer/file/video_double_tap_seek.dart";
 import "package:photos/ui/viewer/file/video_stream_change.dart";
 import "package:photos/ui/viewer/file/zoomable_video_viewer.dart";
 
@@ -43,7 +44,12 @@ class _VideoWidgetState extends State<VideoWidget> {
   final showControlsNotifier = ValueNotifier<bool>(true);
   final _hideControlsDebouncer = Debouncer(const Duration(milliseconds: 2000));
   final _isSeekingNotifier = ValueNotifier<bool>(false);
+  final _lastSeekTime = ValueNotifier<DateTime?>(null);
+  final _lastSeekTargetMs = ValueNotifier<int?>(null);
+  final _seekGeneration = ValueNotifier<int>(0);
+  Timer? _doubleTapSeekReleaseTimer;
   late final StreamSubscription<bool> _isPlayingStreamSubscription;
+  late final StreamSubscription<bool> _completedStreamSubscription;
 
   @override
   void initState() {
@@ -60,17 +66,29 @@ class _VideoWidgetState extends State<VideoWidget> {
             });
           }
         });
+    _completedStreamSubscription = widget.controller.player.stream.completed
+        .listen((isCompleted) {
+          if (isCompleted) {
+            _lastSeekTime.value = null;
+            _lastSeekTargetMs.value = null;
+          }
+        });
 
     _isSeekingNotifier.addListener(isSeekingListener);
   }
 
   @override
   void dispose() {
+    _doubleTapSeekReleaseTimer?.cancel();
     showControlsNotifier.dispose();
     _isPlayingStreamSubscription.cancel();
+    _completedStreamSubscription.cancel();
     _hideControlsDebouncer.cancelDebounceTimer();
     _isSeekingNotifier.removeListener(isSeekingListener);
     _isSeekingNotifier.dispose();
+    _lastSeekTime.dispose();
+    _lastSeekTargetMs.dispose();
+    _seekGeneration.dispose();
     super.dispose();
   }
 
@@ -107,6 +125,61 @@ class _VideoWidgetState extends State<VideoWidget> {
                 child: videoWidget,
               )
             : videoWidget,
+        DoubleTapSeekOverlay(
+          enabled: () => !widget.isFromMemories,
+          position: () => widget.controller.player.state.position,
+          duration: () => widget.controller.player.state.duration,
+          seekTo: (duration) {
+            _lastSeekTime.value = DateTime.now();
+            _lastSeekTargetMs.value = duration.inMilliseconds;
+            _seekGeneration.value++;
+            widget.controller.player.seek(duration).ignore();
+            _doubleTapSeekReleaseTimer?.cancel();
+            _doubleTapSeekReleaseTimer = Timer(
+              const Duration(milliseconds: 500),
+              () {
+                if (mounted) isSeekingListener();
+              },
+            );
+          },
+          onSeekInteraction: () {
+            showControlsNotifier.value = true;
+            _hideControlsDebouncer.cancelDebounceTimer();
+          },
+          onSingleTap: widget.isFromMemories
+              ? null
+              : () {
+                  showControlsNotifier.value = !showControlsNotifier.value;
+                  if (widget.playbackCallback != null) {
+                    widget.playbackCallback!(
+                      !showControlsNotifier.value,
+                      FullScreenRequestReason.userInteraction,
+                    );
+                  }
+                },
+          onLongPress: widget.isFromMemories
+              ? () {
+                  widget.playbackCallback?.call(
+                    false,
+                    FullScreenRequestReason.userInteraction,
+                  );
+                  if (widget.controller.player.state.playing) {
+                    widget.controller.player.pause();
+                  }
+                }
+              : null,
+          onLongPressUp: widget.isFromMemories
+              ? () {
+                  widget.playbackCallback?.call(
+                    true,
+                    FullScreenRequestReason.userInteraction,
+                  );
+                  if (!widget.controller.player.state.playing) {
+                    widget.controller.player.play();
+                  }
+                }
+              : null,
+        ),
         ValueListenableBuilder(
           valueListenable: showControlsNotifier,
           builder: (context, value, _) {
@@ -121,46 +194,6 @@ class _VideoWidgetState extends State<VideoWidget> {
                     VideoBottomScrim(
                       hasCaption: widget.file.caption?.isNotEmpty ?? false,
                     ),
-                  GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTap: widget.isFromMemories
-                        ? null
-                        : () {
-                            showControlsNotifier.value =
-                                !showControlsNotifier.value;
-                            if (widget.playbackCallback != null) {
-                              widget.playbackCallback!(
-                                !showControlsNotifier.value,
-                                FullScreenRequestReason.userInteraction,
-                              );
-                            }
-                          },
-                    onLongPress: () {
-                      if (widget.isFromMemories) {
-                        widget.playbackCallback?.call(
-                          false,
-                          FullScreenRequestReason.userInteraction,
-                        );
-                        if (widget.controller.player.state.playing) {
-                          widget.controller.player.pause();
-                        }
-                      }
-                    },
-                    onLongPressUp: () {
-                      if (widget.isFromMemories) {
-                        widget.playbackCallback?.call(
-                          true,
-                          FullScreenRequestReason.userInteraction,
-                        );
-                        if (!widget.controller.player.state.playing) {
-                          widget.controller.player.play();
-                        }
-                      }
-                    },
-                    child: Container(
-                      constraints: const BoxConstraints.expand(),
-                    ),
-                  ),
                   widget.isFromMemories
                       ? const SizedBox.shrink()
                       : IgnorePointer(
@@ -182,6 +215,9 @@ class _VideoWidgetState extends State<VideoWidget> {
                               child: _MediaKitVideoProgressControls(
                                 controller: widget.controller,
                                 isSeekingNotifier: _isSeekingNotifier,
+                                lastSeekTime: _lastSeekTime,
+                                lastSeekTargetMs: _lastSeekTargetMs,
+                                seekGeneration: _seekGeneration,
                               ),
                             ),
                           ),
@@ -302,10 +338,16 @@ class _PlayPauseButtonState extends State<PlayPauseButtonMediaKit> {
 class _MediaKitVideoProgressControls extends StatefulWidget {
   final VideoController controller;
   final ValueNotifier<bool> isSeekingNotifier;
+  final ValueNotifier<DateTime?> lastSeekTime;
+  final ValueNotifier<int?> lastSeekTargetMs;
+  final ValueNotifier<int> seekGeneration;
 
   const _MediaKitVideoProgressControls({
     required this.controller,
     required this.isSeekingNotifier,
+    required this.lastSeekTime,
+    required this.lastSeekTargetMs,
+    required this.seekGeneration,
   });
 
   @override
@@ -315,12 +357,15 @@ class _MediaKitVideoProgressControls extends StatefulWidget {
 
 class _MediaKitVideoProgressControlsState
     extends State<_MediaKitVideoProgressControls> {
+  static const _staleEventWindow = Duration(milliseconds: 1000);
+  static const _staleDeltaThreshold = Duration(milliseconds: 1500);
+
   double _sliderValue = 0.0;
   Duration _elapsedTime = Duration.zero;
   late final StreamSubscription<Duration> _positionStreamSubscription;
   final _debouncer = Debouncer(
-    const Duration(milliseconds: 300),
-    executionInterval: const Duration(milliseconds: 300),
+    const Duration(milliseconds: 100),
+    executionInterval: const Duration(milliseconds: 325),
   );
   @override
   void initState() {
@@ -328,6 +373,18 @@ class _MediaKitVideoProgressControlsState
     _positionStreamSubscription = widget.controller.player.stream.position
         .listen((event) {
           if (widget.isSeekingNotifier.value) return;
+
+          final lastSeek = widget.lastSeekTime.value;
+          if (lastSeek != null &&
+              DateTime.now().difference(lastSeek) < _staleEventWindow) {
+            final referenceMs =
+                widget.lastSeekTargetMs.value ?? _elapsedTime.inMilliseconds;
+            if ((event.inMilliseconds - referenceMs).abs() >
+                _staleDeltaThreshold.inMilliseconds) {
+              return;
+            }
+          }
+
           if (mounted) {
             setState(() {
               _elapsedTime = event;
@@ -389,12 +446,20 @@ class _MediaKitVideoProgressControlsState
             });
           }
 
+          widget.lastSeekTime.value = DateTime.now();
+          widget.lastSeekTargetMs.value = _elapsedTime.inMilliseconds;
+          widget.seekGeneration.value++;
+
           _debouncer.run(() async {
             await widget.controller.player.seek(_positionAt(value));
           });
         },
         divisions: 4500,
         onChangeEnd: (value) async {
+          widget.lastSeekTime.value = DateTime.now();
+          widget.lastSeekTargetMs.value = _positionAt(value).inMilliseconds;
+          widget.seekGeneration.value++;
+
           await widget.controller.player.seek(_positionAt(value));
           if (mounted) {
             setState(() {

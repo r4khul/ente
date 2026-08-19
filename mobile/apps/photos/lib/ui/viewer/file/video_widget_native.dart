@@ -34,6 +34,7 @@ import "package:photos/ui/viewer/file/native_video_player_controls/play_pause_bu
 import "package:photos/ui/viewer/file/native_video_player_controls/seek_bar.dart";
 import "package:photos/ui/viewer/file/thumbnail_widget.dart";
 import "package:photos/ui/viewer/file/video_control/gallery_video_controls.dart";
+import "package:photos/ui/viewer/file/video_double_tap_seek.dart";
 import "package:photos/ui/viewer/file/video_stream_change.dart";
 import "package:photos/ui/viewer/file/zoomable_video_viewer.dart";
 import "package:photos/utils/dialog_util.dart";
@@ -86,6 +87,10 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
   bool _isCompletelyVisible = false;
   final _showControls = ValueNotifier(true);
   final _isSeeking = ValueNotifier(false);
+  final _lastSeekTime = ValueNotifier<DateTime?>(null);
+  final _lastSeekTargetMs = ValueNotifier<int?>(null);
+  final _seekGeneration = ValueNotifier<int>(0);
+  Timer? _doubleTapSeekReleaseTimer;
   final _debouncer = Debouncer(const Duration(milliseconds: 2000));
   StreamSubscription<PlaybackEvent>? _subscription;
   StreamSubscription<StreamSwitchedEvent>? _streamSwitchedSubscription;
@@ -270,6 +275,10 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
     _showControls.dispose();
     _isSeeking.removeListener(_seekListener);
     _isSeeking.dispose();
+    _doubleTapSeekReleaseTimer?.cancel();
+    _lastSeekTime.dispose();
+    _lastSeekTargetMs.dispose();
+    _seekGeneration.dispose();
     _debouncer.cancelDebounceTimer();
     _transformationController.dispose();
     wakeLockService.updateWakeLock(
@@ -356,9 +365,41 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
                                     widget.file.caption?.isNotEmpty ?? false,
                               ),
                             ),
-                          GestureDetector(
-                            behavior: HitTestBehavior.translucent,
-                            onTap: widget.isFromMemories
+                          DoubleTapSeekOverlay(
+                            enabled: () =>
+                                !widget.isFromMemories && isPlaybackReady,
+                            position: () =>
+                                _controller?.playbackPosition ?? Duration.zero,
+                            duration: () => Duration(
+                              milliseconds:
+                                  ((_controller
+                                              ?.videoInfo
+                                              ?.durationInMilliseconds ??
+                                          0) >
+                                      0
+                                  ? _controller!
+                                        .videoInfo!
+                                        .durationInMilliseconds
+                                  : (durationToSeconds(duration) ?? 0) * 1000),
+                            ),
+                            seekTo: (duration) {
+                              _lastSeekTime.value = DateTime.now();
+                              _lastSeekTargetMs.value = duration.inMilliseconds;
+                              _seekGeneration.value++;
+                              _controller?.seekTo(duration).ignore();
+                              _doubleTapSeekReleaseTimer?.cancel();
+                              _doubleTapSeekReleaseTimer = Timer(
+                                const Duration(milliseconds: 500),
+                                () {
+                                  if (mounted) _seekListener();
+                                },
+                              );
+                            },
+                            onSeekInteraction: () {
+                              _showControls.value = true;
+                              _debouncer.cancelDebounceTimer();
+                            },
+                            onSingleTap: widget.isFromMemories
                                 ? null
                                 : () {
                                     _showControls.value = !_showControls.value;
@@ -369,27 +410,24 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
                                       );
                                     }
                                   },
-                            onLongPress: () {
-                              if (widget.isFromMemories) {
-                                widget.playbackCallback?.call(
-                                  false,
-                                  FullScreenRequestReason.userInteraction,
-                                );
-                                _controller?.pause();
-                              }
-                            },
-                            onLongPressUp: () {
-                              if (widget.isFromMemories) {
-                                widget.playbackCallback?.call(
-                                  true,
-                                  FullScreenRequestReason.userInteraction,
-                                );
-                                _controller?.play();
-                              }
-                            },
-                            child: Container(
-                              constraints: const BoxConstraints.expand(),
-                            ),
+                            onLongPress: widget.isFromMemories
+                                ? () {
+                                    widget.playbackCallback?.call(
+                                      false,
+                                      FullScreenRequestReason.userInteraction,
+                                    );
+                                    _controller?.pause();
+                                  }
+                                : null,
+                            onLongPressUp: widget.isFromMemories
+                                ? () {
+                                    widget.playbackCallback?.call(
+                                      true,
+                                      FullScreenRequestReason.userInteraction,
+                                    );
+                                    _controller?.play();
+                                  }
+                                : null,
                           ),
                           if (!widget.isFromMemories && isPlaybackReady)
                             Positioned.fill(
@@ -430,6 +468,9 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
                                             duration: duration,
                                             showControls: _showControls,
                                             isSeeking: _isSeeking,
+                                            lastSeekTime: _lastSeekTime,
+                                            lastSeekTargetMs: _lastSeekTargetMs,
+                                            seekGeneration: _seekGeneration,
                                           )
                                         : const SizedBox.shrink(),
                                   ),
@@ -850,12 +891,18 @@ class _VideoProgressControls extends StatelessWidget {
   final String? duration;
   final ValueNotifier<bool> showControls;
   final ValueNotifier<bool> isSeeking;
+  final ValueNotifier<DateTime?> lastSeekTime;
+  final ValueNotifier<int?> lastSeekTargetMs;
+  final ValueNotifier<int> seekGeneration;
 
   const _VideoProgressControls({
     required this.controller,
     required this.duration,
     required this.showControls,
     required this.isSeeking,
+    required this.lastSeekTime,
+    required this.lastSeekTargetMs,
+    required this.seekGeneration,
   });
 
   @override
@@ -873,6 +920,9 @@ class _VideoProgressControls extends StatelessWidget {
               controller,
               durationToSeconds(duration),
               isSeeking,
+              lastSeekTime: lastSeekTime,
+              lastSeekTargetMs: lastSeekTargetMs,
+              seekGeneration: seekGeneration,
             ),
           ),
         );
