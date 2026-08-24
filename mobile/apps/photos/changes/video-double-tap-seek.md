@@ -1,2 +1,1 @@
-- Added double-tap video seek. (@r4khul)
-- Fixed video seek bar snapping glitch during manual drag. (@r4khul)
+- Added five-second double-tap seeking for videos. (@r4khul)

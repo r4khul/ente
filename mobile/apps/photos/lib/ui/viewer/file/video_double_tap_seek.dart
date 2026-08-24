@@ -41,6 +41,7 @@ class _DoubleTapSeekOverlayState extends State<DoubleTapSeekOverlay>
   int _accumulatedSeconds = 0;
   DateTime? _lastDoubleTapTime;
   bool? _lastDirection;
+  Duration? _lastSeekTarget;
   TapDownDetails? _doubleTapDetails;
   int _seekGeneration = 0;
   late final AnimationController _badgeAnimation;
@@ -80,17 +81,28 @@ class _DoubleTapSeekOverlayState extends State<DoubleTapSeekOverlay>
     final target = widget.seekBy(
       isForward ? kDefaultSeekDuration : -kDefaultSeekDuration,
     );
-    final applied = (target - position).abs();
-    if (applied == Duration.zero) return;
-    final appliedSeconds = (applied.inMilliseconds / 1000).ceil();
+    if (isFastSequence && target == _lastSeekTarget) {
+      _lastDoubleTapTime = now;
+      _showSeekBadge(isForward);
+      return;
+    }
+    if (target == position) {
+      if (_showBadge) {
+        _lastDoubleTapTime = now;
+        _showSeekBadge(isForward);
+      }
+      return;
+    }
+    final requestedSeconds = kDefaultSeekDuration.inSeconds;
 
     if (isFastSequence) {
-      _accumulatedSeconds += appliedSeconds;
+      _accumulatedSeconds += requestedSeconds;
     } else {
-      _accumulatedSeconds = appliedSeconds;
+      _accumulatedSeconds = requestedSeconds;
       _lastDirection = isForward;
     }
     _lastDoubleTapTime = now;
+    _lastSeekTarget = target;
     _seekGeneration++;
 
     widget.onSeekInteraction?.call();
@@ -110,6 +122,7 @@ class _DoubleTapSeekOverlayState extends State<DoubleTapSeekOverlay>
       setState(() {
         _showBadge = false;
         _lastDoubleTapTime = null;
+        _lastSeekTarget = null;
       });
     });
   }
