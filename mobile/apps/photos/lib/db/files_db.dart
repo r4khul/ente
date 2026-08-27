@@ -1,6 +1,7 @@
 import "dart:async";
 import "dart:io";
 
+import "package:collection/collection.dart";
 import "package:computer/computer.dart";
 import "package:ente_pure_utils/ente_pure_utils.dart";
 import 'package:flutter/foundation.dart';
@@ -32,6 +33,7 @@ class FilesDB with SqlDbBase {
 
   static const filesTable = 'files';
   static const tempTable = 'temp_files';
+  static const deviceFilesTable = 'device_files';
 
   static const columnGeneratedID = '_id';
   static const columnUploadedFileID = 'uploaded_file_id';
@@ -337,7 +339,7 @@ class FilesDB with SqlDbBase {
   static List<String> createOnDeviceFilesAndPathCollection() {
     return [
       '''
-        CREATE TABLE IF NOT EXISTS device_files (
+        CREATE TABLE IF NOT EXISTS $deviceFilesTable (
           id TEXT NOT NULL,
           path_id TEXT NOT NULL,
           UNIQUE(id, path_id)
@@ -356,10 +358,10 @@ class FilesDB with SqlDbBase {
       );
       ''',
       '''
-      CREATE INDEX IF NOT EXISTS df_id_idx ON device_files (id);
+      CREATE INDEX IF NOT EXISTS df_id_idx ON $deviceFilesTable (id);
       ''',
       '''
-      CREATE INDEX IF NOT EXISTS df_path_id_idx ON device_files (path_id);
+      CREATE INDEX IF NOT EXISTS df_path_id_idx ON $deviceFilesTable (path_id);
       ''',
     ];
   }
@@ -1325,6 +1327,78 @@ class FilesDB with SqlDbBase {
     );
   }
 
+  Future<void> reconcileUploadedDeviceFolderMove({
+    required String sourcePathID,
+    required String targetPathID,
+    required Map<String, String> destinationLocalIDs,
+  }) async {
+    if (destinationLocalIDs.isEmpty) return;
+    final db = await sqliteAsyncDB;
+    await db.writeTransaction((tx) async {
+      for (final entry in destinationLocalIDs.entries) {
+        final sourceLocalID = entry.key;
+        final destinationLocalID = entry.value;
+        await tx.execute(
+          'DELETE FROM $deviceFilesTable WHERE id = ? AND path_id = ?',
+          [sourceLocalID, sourcePathID],
+        );
+        await tx.execute(
+          'INSERT OR IGNORE INTO $deviceFilesTable (id, path_id) VALUES (?, ?)',
+          [destinationLocalID, targetPathID],
+        );
+        await tx.execute(
+          'UPDATE $filesTable SET $columnLocalID = ? '
+          'WHERE $columnLocalID = ? AND $columnUploadedFileID IS NOT NULL '
+          'AND $columnUploadedFileID != -1',
+          [destinationLocalID, sourceLocalID],
+        );
+      }
+    });
+  }
+
+  Future<List<EnteFile>> getUploadedFilesForLocalIDs(
+    Iterable<String> localIDs, {
+    int? collectionID,
+  }) async {
+    final ids = localIDs.toSet().toList(growable: false);
+    if (ids.isEmpty) return const [];
+    final db = await sqliteAsyncDB;
+    final rows = <Map<String, Object?>>[];
+    for (final batch in ids.slices(900)) {
+      final placeholders = List.filled(batch.length, '?').join(',');
+      final collectionClause = collectionID == null
+          ? ''
+          : ' AND $columnCollectionID = ?';
+      rows.addAll(
+        await db.getAll(
+          'SELECT * FROM $filesTable WHERE $columnLocalID IN ($placeholders) '
+          'AND $columnUploadedFileID IS NOT NULL AND $columnUploadedFileID != -1'
+          '$collectionClause',
+          collectionID == null ? batch : [...batch, collectionID],
+        ),
+      );
+    }
+    return convertToFiles(rows);
+  }
+
+  Future<Set<String>> getUploadedLocalIDs(Iterable<String> localIDs) async {
+    final ids = localIDs.toSet().toList(growable: false);
+    if (ids.isEmpty) return const {};
+    final db = await sqliteAsyncDB;
+    final uploaded = <String>{};
+    for (final batch in ids.slices(900)) {
+      final placeholders = List.filled(batch.length, '?').join(',');
+      final rows = await db.getAll(
+        'SELECT DISTINCT $columnLocalID FROM $filesTable '
+        'WHERE $columnLocalID IN ($placeholders) '
+        'AND $columnUploadedFileID IS NOT NULL AND $columnUploadedFileID != -1',
+        batch,
+      );
+      uploaded.addAll(rows.map((row) => row[columnLocalID] as String));
+    }
+    return uploaded;
+  }
+
   Future<void> deleteByGeneratedID(int genID) async {
     final db = await instance.sqliteAsyncDB;
 
@@ -1501,6 +1575,69 @@ class FilesDB with SqlDbBase {
       [collectionID],
     );
     return convertToFiles(results);
+  }
+
+  Future<void> reconcileRemovedDeviceFolderMappings({
+    required Map<String, Set<String>> mappingsToRemove,
+    required Map<String, Set<String>> pendingMappingsToRemove,
+    required Map<String, int> automaticBackupCollectionIDsByPath,
+  }) async {
+    if (mappingsToRemove.isEmpty) return;
+
+    final db = await instance.sqliteAsyncDB;
+    await db.writeTransaction((tx) async {
+      final mappingParameters = <List<Object?>>[];
+      for (final entry in mappingsToRemove.entries) {
+        for (final localID in entry.value) {
+          mappingParameters.add([localID, entry.key]);
+        }
+      }
+      const batchSize = 400;
+      for (
+        var start = 0;
+        start < mappingParameters.length;
+        start += batchSize
+      ) {
+        final end = (start + batchSize).clamp(0, mappingParameters.length);
+        await tx.executeBatch(
+          'DELETE FROM $deviceFilesTable WHERE id = ? AND path_id = ?;',
+          mappingParameters.sublist(start, end),
+        );
+      }
+
+      for (final entry in automaticBackupCollectionIDsByPath.entries) {
+        final removedLocalIDs = pendingMappingsToRemove[entry.key];
+        if (removedLocalIDs == null || removedLocalIDs.isEmpty) continue;
+        await _clearPendingAutoBackupEntriesInTransaction(
+          tx,
+          collectionID: entry.value,
+          localIDs: removedLocalIDs,
+        );
+      }
+    });
+  }
+
+  Future<void> _clearPendingAutoBackupEntriesInTransaction(
+    SqliteWriteContext tx, {
+    required int collectionID,
+    required Set<String> localIDs,
+  }) async {
+    const batchSize = 400;
+    final ids = localIDs.toList();
+    for (var start = 0; start < ids.length; start += batchSize) {
+      final end = (start + batchSize).clamp(0, ids.length);
+      final batch = ids.sublist(start, end);
+      final placeholders = List.filled(batch.length, '?').join(',');
+      await tx.execute(
+        '''
+        DELETE FROM $filesTable
+        WHERE $columnCollectionID = ?
+          AND $columnLocalID IN ($placeholders)
+          AND ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1)
+        ''',
+        [collectionID, ...batch],
+      );
+    }
   }
 
   Future<Set<String>> getLocalIDsPresentInEntries(

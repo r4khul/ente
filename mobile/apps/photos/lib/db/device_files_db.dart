@@ -133,6 +133,42 @@ extension DeviceFiles on FilesDB {
     return names.toList(growable: false);
   }
 
+  Future<DeviceCollection?> getDeviceCollectionForLocalIDs(
+    Iterable<String> localIDs,
+  ) async {
+    final ids = localIDs.toSet().toList(growable: false);
+    if (ids.isEmpty) return null;
+    final db = await sqliteAsyncDB;
+    Set<String>? commonPathIDs;
+    for (final idsBatch in ids.slices(900)) {
+      final placeholders = List.filled(idsBatch.length, '?').join(',');
+      final rows = await db.getAll(
+        'SELECT id, path_id FROM device_files WHERE id IN ($placeholders)',
+        idsBatch,
+      );
+      final pathIDsByLocalID = <String, Set<String>>{};
+      for (final row in rows) {
+        final localID = row['id'] as String;
+        final pathID = row['path_id'] as String;
+        pathIDsByLocalID.putIfAbsent(localID, () => <String>{}).add(pathID);
+      }
+      for (final localID in idsBatch) {
+        final pathIDs = pathIDsByLocalID[localID];
+        if (pathIDs == null || pathIDs.isEmpty) return null;
+        commonPathIDs = commonPathIDs == null
+            ? Set<String>.of(pathIDs)
+            : commonPathIDs.intersection(pathIDs);
+        if (commonPathIDs.isEmpty) return null;
+      }
+    }
+    if (commonPathIDs == null || commonPathIDs.length != 1) return null;
+    final pathID = commonPathIDs.single;
+    final collections = await getDeviceCollections();
+    return collections.firstWhereOrNull(
+      (collection) => collection.id == pathID,
+    );
+  }
+
   Future<Set<String>> getLocalIDsInBackupFolders(
     Set<String> localIDs,
     Set<int> excludedCollectionIDs,
