@@ -244,6 +244,9 @@ class _SearchSectionAllPageState extends State<SearchSectionAllPage> {
                     } else if (result is GenericSearchResult) {
                       return SearchableItemWidget(
                         result,
+                        enableDeviceFolderTransfer:
+                            widget.sectionType ==
+                            SectionType.fileTypesAndExtension,
                         onResultTap: result.onResultTap != null
                             ? () => result.onResultTap!(context)
                             : null,

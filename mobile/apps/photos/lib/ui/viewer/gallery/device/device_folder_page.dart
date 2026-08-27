@@ -110,6 +110,7 @@ class _DeviceFolderPageState extends State<DeviceFolderPage> {
                 FileSelectionOverlayBar(
                   GalleryType.localFolder,
                   _selectedFiles,
+                  deviceCollection: widget.deviceCollection,
                 ),
               ],
             ),

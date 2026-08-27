@@ -22,6 +22,7 @@ import "package:photos/ui/viewer/gallery/state/selection_state.dart";
 class SearchResultPage extends StatefulWidget {
   final SearchResult searchResult;
   final bool enableGrouping;
+  final bool enableDeviceFolderTransfer;
   final String tagPrefix;
 
   static const GalleryType appBarType = GalleryType.searchResults;
@@ -30,6 +31,7 @@ class SearchResultPage extends StatefulWidget {
   const SearchResultPage(
     this.searchResult, {
     this.enableGrouping = true,
+    this.enableDeviceFolderTransfer = false,
     this.tagPrefix = "",
     super.key,
   });
@@ -138,6 +140,8 @@ class _SearchResultPageState extends State<SearchResultPage> {
                   FileSelectionOverlayBar(
                     SearchResultPage.overlayType,
                     _selectedFiles,
+                    enableDeviceFolderTransfer:
+                        widget.enableDeviceFolderTransfer,
                   ),
                 ],
               ),

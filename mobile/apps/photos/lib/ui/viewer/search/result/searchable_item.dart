@@ -19,11 +19,13 @@ class SearchableItemWidget extends StatelessWidget {
   final SearchResult searchResult;
   final Future<int>? resultCount;
   final Function? onResultTap;
+  final bool enableDeviceFolderTransfer;
   const SearchableItemWidget(
     this.searchResult, {
     super.key,
     this.resultCount,
     this.onResultTap,
+    this.enableDeviceFolderTransfer = false,
   });
 
   @override
@@ -54,7 +56,11 @@ class SearchableItemWidget extends StatelessWidget {
           } else {
             routeToPage(
               context,
-              SearchResultPage(searchResult, tagPrefix: additionalPrefix),
+              SearchResultPage(
+                searchResult,
+                tagPrefix: additionalPrefix,
+                enableDeviceFolderTransfer: enableDeviceFolderTransfer,
+              ),
             );
           }
         }

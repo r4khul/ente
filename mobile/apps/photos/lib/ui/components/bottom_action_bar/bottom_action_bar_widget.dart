@@ -3,6 +3,7 @@ import "package:ente_ui/components/divider_widget.dart";
 import 'package:flutter/material.dart';
 import 'package:photos/core/constants.dart';
 import 'package:photos/models/collection/collection.dart';
+import 'package:photos/models/device_collection.dart';
 import "package:photos/models/gallery_type.dart";
 import "package:photos/models/ml/face/person.dart";
 import 'package:photos/models/selected_files.dart';
@@ -12,6 +13,8 @@ import "package:photos/ui/viewer/actions/file_selection_actions_widget.dart";
 class BottomActionBarWidget extends StatelessWidget {
   final GalleryType galleryType;
   final Collection? collection;
+  final DeviceCollection? deviceCollection;
+  final bool enableDeviceFolderTransfer;
   final PersonEntity? person;
   final String? clusterID;
   final SelectedFiles selectedFiles;
@@ -22,6 +25,8 @@ class BottomActionBarWidget extends StatelessWidget {
     required this.galleryType,
     required this.selectedFiles,
     this.collection,
+    this.deviceCollection,
+    this.enableDeviceFolderTransfer = false,
     this.person,
     this.clusterID,
     this.onCancel,
@@ -60,6 +65,8 @@ class BottomActionBarWidget extends StatelessWidget {
             galleryType,
             selectedFiles,
             collection: collection,
+            deviceCollection: deviceCollection,
+            enableDeviceFolderTransfer: enableDeviceFolderTransfer,
             person: person,
             clusterID: clusterID,
           ),
