@@ -280,6 +280,10 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
 
     private fun startPendingConsentRequest() {
         if (isConsentRequestInProgress) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            completeWithFailures("unsupported")
+            return
+        }
         val host = activity
         if (host == null) {
             completeWithFailures("failed")

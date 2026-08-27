@@ -122,6 +122,15 @@ class _FileSelectionActionsWidgetState
       _canTransferWithinDeviceFolders &&
       _supportedDeviceFolderTransferOperations.contains(operation);
 
+  DeviceFolderTransferIdentityPolicy _identityPolicyFor(
+    DeviceFolderTransferOperation operation,
+    DeviceCollection source,
+  ) => operation == DeviceFolderTransferOperation.move
+      ? DeviceFolderTransferIdentityPolicy.allowReplacementLocalID
+      : source.shouldBackup
+      ? DeviceFolderTransferIdentityPolicy.preserveSourceLocalID
+      : DeviceFolderTransferIdentityPolicy.allowReplacementLocalID;
+
   bool get _canRemoveOthersFiles =>
       widget.collection != null &&
       CollectionsService.instance.canRemoveFilesFromAllParticipants(
@@ -783,6 +792,12 @@ class _FileSelectionActionsWidgetState
       final uploadedSourceLocalIDs = await FilesDB.instance.getUploadedLocalIDs(
         localIDs,
       );
+      final cloudMoveSourceLocalIDs = source.hasCollectionID()
+          ? await FilesDB.instance.getUploadedLocalIDs(
+              localIDs,
+              collectionID: source.collectionID,
+            )
+          : const <String>{};
       if (!context.mounted) return;
       final backedUpFileCount = uploadedSourceLocalIDs.length;
       if (operation == DeviceFolderTransferOperation.copy &&
@@ -795,15 +810,20 @@ class _FileSelectionActionsWidgetState
         );
         if (!confirmed || !context.mounted) return;
       }
-      var moveInEnte = false;
+      DeviceFolderTransferCloudMove? cloudMove;
       if (operation == DeviceFolderTransferOperation.move &&
           source.shouldBackup &&
           destination.shouldBackup &&
-          backedUpFileCount > 0) {
+          cloudMoveSourceLocalIDs.isNotEmpty) {
         if (!mounted) return;
         final choice = await showBackedUpDeviceFolderMoveSheet(context);
         if (choice == null || !mounted) return;
-        moveInEnte = choice == BackedUpDeviceFolderMoveChoice.moveInEnte;
+        if (choice == BackedUpDeviceFolderMoveChoice.moveInEnte) {
+          cloudMove = DeviceFolderTransferCloudMove(
+            sourceCollectionID: source.collectionID!,
+            sourceLocalIDs: cloudMoveSourceLocalIDs,
+          );
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -829,15 +849,11 @@ class _FileSelectionActionsWidgetState
           source: source,
           destination: destination,
           uploadedSourceLocalIDs: uploadedSourceLocalIDs,
-          moveInEnte: moveInEnte,
+          cloudMove: cloudMove,
           request: DeviceFolderTransferRequest(
             operation: operation,
             sourceFolderID: source.id,
-            identityPolicy: operation == DeviceFolderTransferOperation.move
-                ? DeviceFolderTransferIdentityPolicy.allowReplacementLocalID
-                : source.shouldBackup
-                ? DeviceFolderTransferIdentityPolicy.preserveSourceLocalID
-                : DeviceFolderTransferIdentityPolicy.allowReplacementLocalID,
+            identityPolicy: _identityPolicyFor(operation, source),
             targetFolderID: destination.id,
             sourceLocalIDs: localIDs,
           ),
@@ -861,7 +877,7 @@ class _FileSelectionActionsWidgetState
       }
       if (!mounted) return;
       final failures = result.failures.length;
-      if (failures == 0) {
+      if (failures == 0 && result.successLocalIDs.isNotEmpty) {
         showShortToast(
           context,
           operation == DeviceFolderTransferOperation.move
@@ -909,11 +925,7 @@ class _FileSelectionActionsWidgetState
         .eligibleDestinationIDs(
           sourceFolderID: source.id,
           operation: operation,
-          identityPolicy: operation == DeviceFolderTransferOperation.move
-              ? DeviceFolderTransferIdentityPolicy.allowReplacementLocalID
-              : source.shouldBackup
-              ? DeviceFolderTransferIdentityPolicy.preserveSourceLocalID
-              : DeviceFolderTransferIdentityPolicy.allowReplacementLocalID,
+          identityPolicy: _identityPolicyFor(operation, source),
           sourceLocalIDs: sourceLocalIDs,
           candidateFolderIDs: candidates.map((folder) => folder.id).toList(),
         );

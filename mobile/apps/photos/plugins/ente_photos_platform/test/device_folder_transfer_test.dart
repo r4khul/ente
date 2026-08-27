@@ -115,19 +115,22 @@ void main() {
       'transferID': 'transfer-id',
       'sourceFolderID': 'source',
       'targetFolderID': 'target',
-      'moveInEnte': true,
       'sourceLocalIDs': ['one'],
       'ownerID': 7,
       'cloudMoveCompleted': false,
+      'cloudMoveSourceCollectionID': 9,
+      'cloudMoveSourceLocalIDs': ['one'],
       'successLocalIDs': ['one'],
       'destinationLocalIDs': {'one': 'new-one'},
       'failures': <String, String>{},
     });
 
     expect(recovery.transferID, 'transfer-id');
-    expect(recovery.moveInEnte, isTrue);
     expect(recovery.sourceLocalIDs, {'one'});
     expect(recovery.ownerID, 7);
+    expect(recovery.cloudMoveSourceCollectionID, 9);
+    expect(recovery.cloudMoveSourceLocalIDs, {'one'});
+    expect(recovery.hasCloudMove, isTrue);
     expect(recovery.result.destinationLocalIDs, {'one': 'new-one'});
   });
 }

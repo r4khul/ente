@@ -13,6 +13,16 @@ import 'package:photos/services/collections_service.dart';
 import 'package:photos/services/sync/local_sync_service.dart';
 import 'package:uuid/uuid.dart';
 
+class DeviceFolderTransferCloudMove {
+  const DeviceFolderTransferCloudMove({
+    required this.sourceCollectionID,
+    required this.sourceLocalIDs,
+  });
+
+  final int sourceCollectionID;
+  final Set<String> sourceLocalIDs;
+}
+
 class DeviceFolderTransferCoordinator {
   DeviceFolderTransferCoordinator._();
 
@@ -26,14 +36,14 @@ class DeviceFolderTransferCoordinator {
     required DeviceCollection source,
     required DeviceCollection destination,
     required Set<String> uploadedSourceLocalIDs,
-    required bool moveInEnte,
+    required DeviceFolderTransferCloudMove? cloudMove,
   }) => LocalSyncService.instance.getLock().synchronized(
     () => _transfer(
       request: request,
       source: source,
       destination: destination,
       uploadedSourceLocalIDs: uploadedSourceLocalIDs,
-      moveInEnte: moveInEnte,
+      cloudMove: cloudMove,
     ),
   );
 
@@ -42,7 +52,7 @@ class DeviceFolderTransferCoordinator {
     required DeviceCollection source,
     required DeviceCollection destination,
     required Set<String> uploadedSourceLocalIDs,
-    required bool moveInEnte,
+    required DeviceFolderTransferCloudMove? cloudMove,
   }) async {
     final ownerID = Configuration.instance.getUserIDV2();
     final isBackedUpMove =
@@ -62,9 +72,12 @@ class DeviceFolderTransferCoordinator {
             : {
                 'sourceFolderID': source.id,
                 'targetFolderID': destination.id,
-                'moveInEnte': moveInEnte,
                 'ownerID': ownerID,
                 'sourceLocalIDs': uploadedSourceLocalIDs.toList(),
+                if (cloudMove != null) ...{
+                  'cloudMoveSourceCollectionID': cloudMove.sourceCollectionID,
+                  'cloudMoveSourceLocalIDs': cloudMove.sourceLocalIDs.toList(),
+                },
               },
       ),
     );
@@ -76,7 +89,7 @@ class DeviceFolderTransferCoordinator {
       destination: destination,
       result: result,
       selectedIDs: uploadedSourceLocalIDs,
-      moveInEnte: moveInEnte,
+      cloudMove: cloudMove,
       cloudMoveCompleted: false,
     );
     return result;
@@ -108,6 +121,12 @@ class DeviceFolderTransferCoordinator {
         if (recovery.ownerID != Configuration.instance.getUserIDV2()) {
           continue;
         }
+        final cloudMove = recovery.hasCloudMove
+            ? DeviceFolderTransferCloudMove(
+                sourceCollectionID: recovery.cloudMoveSourceCollectionID!,
+                sourceLocalIDs: recovery.cloudMoveSourceLocalIDs,
+              )
+            : null;
         await LocalSyncService.instance.getLock().synchronized(
           () => _completeBackedUpMove(
             transferID: recovery.transferID,
@@ -115,7 +134,7 @@ class DeviceFolderTransferCoordinator {
             destination: destination,
             result: recovery.result,
             selectedIDs: recovery.sourceLocalIDs,
-            moveInEnte: recovery.moveInEnte,
+            cloudMove: cloudMove,
             cloudMoveCompleted: recovery.cloudMoveCompleted,
           ),
         );
@@ -135,7 +154,7 @@ class DeviceFolderTransferCoordinator {
     required DeviceCollection destination,
     required DeviceFolderTransferResult result,
     required Set<String> selectedIDs,
-    required bool moveInEnte,
+    required DeviceFolderTransferCloudMove? cloudMove,
     required bool cloudMoveCompleted,
   }) async {
     final destinationIDs = Map<String, String>.fromEntries(
@@ -148,12 +167,12 @@ class DeviceFolderTransferCoordinator {
       return;
     }
 
-    if (moveInEnte && !cloudMoveCompleted) {
+    if (cloudMove != null && !cloudMoveCompleted) {
       final files = await FilesDB.instance.getUploadedFilesForLocalIDs(
-        destinationIDs.keys,
-        collectionID: source.collectionID,
+        destinationIDs.keys.where(cloudMove.sourceLocalIDs.contains),
+        collectionID: cloudMove.sourceCollectionID,
       );
-      await _moveFilesInEnte(files, destination, source.collectionID);
+      await _moveFilesInEnte(files, destination, cloudMove.sourceCollectionID);
       await _client.markCloudMoveCompleted(transferID);
     }
     await FilesDB.instance.reconcileUploadedDeviceFolderMove(
@@ -167,13 +186,9 @@ class DeviceFolderTransferCoordinator {
   Future<void> _moveFilesInEnte(
     List<EnteFile> files,
     DeviceCollection destination,
-    int? sourceCollectionID,
+    int sourceCollectionID,
   ) async {
-    if (files.isEmpty ||
-        sourceCollectionID == null ||
-        sourceCollectionID == -1) {
-      return;
-    }
+    if (files.isEmpty) return;
     final target = await _ensureBackupCollection(destination);
     final movableFiles = files
         .where((file) => file.collectionID == sourceCollectionID)

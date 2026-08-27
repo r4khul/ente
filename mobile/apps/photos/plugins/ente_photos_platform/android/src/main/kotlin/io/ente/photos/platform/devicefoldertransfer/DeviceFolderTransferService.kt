@@ -10,6 +10,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import java.io.IOException
+import org.json.JSONArray
 import org.json.JSONObject
 
 internal class DeviceFolderTransferService(private val context: Context) {
@@ -167,12 +168,11 @@ internal class DeviceFolderTransferService(private val context: Context) {
             val failureMap = mutableMapOf<String, String>()
             destinationIDs.keys().forEach { key -> destinationMap[key] = destinationIDs.getString(key) }
             failures.keys().forEach { key -> failureMap[key] = failures.getString(key) }
-            mapOf(
+            val recovery = mutableMapOf<String, Any>(
                 "transferID" to transferID,
                 "sourceFolderID" to json.getString("sourceFolderID"),
                 "targetFolderID" to json.getString("targetFolderID"),
-                "ownerID" to json.getInt("ownerID"),
-                "moveInEnte" to json.optBoolean("moveInEnte", false),
+                "ownerID" to json.getLong("ownerID"),
                 "sourceLocalIDs" to json.getJSONArray("sourceLocalIDs").let { array ->
                     List(array.length()) { index -> array.getString(index) }
                 },
@@ -183,6 +183,17 @@ internal class DeviceFolderTransferService(private val context: Context) {
                 "destinationLocalIDs" to destinationMap,
                 "failures" to failureMap,
             )
+            if (json.has("cloudMoveSourceCollectionID")) {
+                recovery["cloudMoveSourceCollectionID"] =
+                    json.getLong("cloudMoveSourceCollectionID")
+            }
+            if (json.has("cloudMoveSourceLocalIDs")) {
+                recovery["cloudMoveSourceLocalIDs"] =
+                    json.getJSONArray("cloudMoveSourceLocalIDs").let { array ->
+                        List(array.length()) { index -> array.getString(index) }
+                    }
+            }
+            recovery
         } catch (error: Exception) {
             Log.e(TAG, "Could not read device-folder transfer recovery record", error)
             null
@@ -270,9 +281,11 @@ internal class DeviceFolderTransferService(private val context: Context) {
         val preferences = context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
         val existing = preferences.getString(transferID, null)
         val json = existing?.let(::JSONObject) ?: JSONObject()
-        recoveryContext?.forEach { (key, value) -> json.put(key, value) }
+        recoveryContext?.forEach { (key, value) ->
+            json.put(key, if (value is Collection<*>) JSONArray(value) else value)
+        }
         json.apply {
-            put("successLocalIDs", result["successLocalIDs"])
+            put("successLocalIDs", JSONArray(result["successLocalIDs"] as List<*>))
             put("destinationLocalIDs", JSONObject(result["destinationLocalIDs"] as Map<*, *>))
             put("failures", JSONObject(result["failures"] as Map<*, *>))
         }

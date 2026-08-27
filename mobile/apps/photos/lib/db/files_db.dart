@@ -19,6 +19,18 @@ import "package:photos/models/metadata/common_keys.dart";
 import "package:photos/services/filter/db_filters.dart";
 import 'package:sqlite_async/sqlite_async.dart';
 
+class PendingDeviceFolderMove {
+  const PendingDeviceFolderMove({
+    required this.sourceCollectionID,
+    required this.destinationFolderName,
+    required this.localIDs,
+  });
+
+  final int sourceCollectionID;
+  final String destinationFolderName;
+  final Set<String> localIDs;
+}
+
 class FilesDB with SqlDbBase {
   /*
   Note: columnUploadedFileID and columnCollectionID have to be compared against
@@ -1381,18 +1393,25 @@ class FilesDB with SqlDbBase {
     return convertToFiles(rows);
   }
 
-  Future<Set<String>> getUploadedLocalIDs(Iterable<String> localIDs) async {
+  Future<Set<String>> getUploadedLocalIDs(
+    Iterable<String> localIDs, {
+    int? collectionID,
+  }) async {
     final ids = localIDs.toSet().toList(growable: false);
     if (ids.isEmpty) return const {};
     final db = await sqliteAsyncDB;
     final uploaded = <String>{};
     for (final batch in ids.slices(900)) {
       final placeholders = List.filled(batch.length, '?').join(',');
+      final collectionClause = collectionID == null
+          ? ''
+          : ' AND $columnCollectionID = ?';
       final rows = await db.getAll(
         'SELECT DISTINCT $columnLocalID FROM $filesTable '
         'WHERE $columnLocalID IN ($placeholders) '
-        'AND $columnUploadedFileID IS NOT NULL AND $columnUploadedFileID != -1',
-        batch,
+        'AND $columnUploadedFileID IS NOT NULL AND $columnUploadedFileID != -1'
+        '$collectionClause',
+        collectionID == null ? batch : [...batch, collectionID],
       );
       uploaded.addAll(rows.map((row) => row[columnLocalID] as String));
     }
@@ -1581,6 +1600,7 @@ class FilesDB with SqlDbBase {
     required Map<String, Set<String>> mappingsToRemove,
     required Map<String, Set<String>> pendingMappingsToRemove,
     required Map<String, int> automaticBackupCollectionIDsByPath,
+    required List<PendingDeviceFolderMove> pendingMoves,
   }) async {
     if (mappingsToRemove.isEmpty) return;
 
@@ -1603,6 +1623,25 @@ class FilesDB with SqlDbBase {
           'DELETE FROM $deviceFilesTable WHERE id = ? AND path_id = ?;',
           mappingParameters.sublist(start, end),
         );
+      }
+
+      for (final move in pendingMoves) {
+        final localIDs = move.localIDs.toList();
+        for (var start = 0; start < localIDs.length; start += batchSize) {
+          final end = (start + batchSize).clamp(0, localIDs.length);
+          final batch = localIDs.sublist(start, end);
+          final placeholders = List.filled(batch.length, '?').join(',');
+          await tx.execute(
+            '''
+            UPDATE $filesTable
+            SET $columnCollectionID = NULL, $columnDeviceFolder = ?
+            WHERE $columnCollectionID = ?
+              AND $columnLocalID IN ($placeholders)
+              AND ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1)
+            ''',
+            [move.destinationFolderName, move.sourceCollectionID, ...batch],
+          );
+        }
       }
 
       for (final entry in automaticBackupCollectionIDsByPath.entries) {

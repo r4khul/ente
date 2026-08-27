@@ -101,20 +101,27 @@ class DeviceFolderTransferRecovery {
     required this.result,
     required this.sourceFolderID,
     required this.targetFolderID,
-    required this.moveInEnte,
     required this.sourceLocalIDs,
     required this.ownerID,
     required this.cloudMoveCompleted,
+    this.cloudMoveSourceCollectionID,
+    this.cloudMoveSourceLocalIDs = const {},
   });
 
   final String transferID;
   final DeviceFolderTransferResult result;
   final String sourceFolderID;
   final String targetFolderID;
-  final bool moveInEnte;
   final Set<String> sourceLocalIDs;
   final int ownerID;
   final bool cloudMoveCompleted;
+  final int? cloudMoveSourceCollectionID;
+  final Set<String> cloudMoveSourceLocalIDs;
+
+  bool get hasCloudMove =>
+      cloudMoveSourceCollectionID != null &&
+      cloudMoveSourceCollectionID != -1 &&
+      cloudMoveSourceLocalIDs.isNotEmpty;
 
   factory DeviceFolderTransferRecovery.fromChannelMap(
     Map<dynamic, dynamic> map,
@@ -124,12 +131,17 @@ class DeviceFolderTransferRecovery {
       result: DeviceFolderTransferResult.fromChannelMap(map),
       sourceFolderID: map['sourceFolderID'] as String,
       targetFolderID: map['targetFolderID'] as String,
-      moveInEnte: map['moveInEnte'] == true,
       sourceLocalIDs: (map['sourceLocalIDs'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .toSet(),
       ownerID: map['ownerID'] as int,
       cloudMoveCompleted: map['cloudMoveCompleted'] == true,
+      cloudMoveSourceCollectionID: (map['cloudMoveSourceCollectionID'] as num?)
+          ?.toInt(),
+      cloudMoveSourceLocalIDs:
+          (map['cloudMoveSourceLocalIDs'] as List<dynamic>? ?? const [])
+              .whereType<String>()
+              .toSet(),
     );
   }
 }

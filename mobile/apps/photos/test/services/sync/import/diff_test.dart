@@ -116,4 +116,27 @@ void main() {
 
     expect(result.deletePathToLocalIDs, isEmpty);
   });
+
+  test('reports an explicit move after its source mapping was reconciled', () {
+    final result = getLocalAssetsDiffForTesting(
+      assets: [
+        LocalPathAsset(
+          pathID: 'destination',
+          pathName: 'Destination',
+          localIDs: {'file-1'},
+        ),
+      ],
+      existingIDs: {'file-1'},
+      pathToLocalIDs: {
+        'destination': {'file-1'},
+      },
+      explicitlyRemovedPathToLocalIDs: {
+        'source': {'file-1'},
+      },
+    );
+
+    expect(result.deletePathToLocalIDs, {
+      'source': {'file-1'},
+    });
+  });
 }

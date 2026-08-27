@@ -30,6 +30,49 @@ import "package:shared_preferences/shared_preferences.dart";
 import "package:synchronized/synchronized.dart";
 import "package:tuple/tuple.dart";
 
+List<PendingDeviceFolderMove> _pendingDeviceFolderMoves({
+  required Map<String, Set<String>> explicitlyRemovedMappings,
+  required Iterable<LocalPathAsset> localAssets,
+  required Map<String, int> automaticBackupCollectionIDsByPath,
+  required Map<String, String> deviceFolderNamesByPath,
+}) {
+  final destinationFolderNamesByLocalID = <String, String>{};
+  for (final asset in localAssets) {
+    final destinationFolderName = deviceFolderNamesByPath[asset.pathID];
+    if (destinationFolderName == null) continue;
+    for (final localID in asset.localIDs) {
+      destinationFolderNamesByLocalID.putIfAbsent(
+        localID,
+        () => destinationFolderName,
+      );
+    }
+  }
+
+  final pendingMoves = <PendingDeviceFolderMove>[];
+  for (final entry in explicitlyRemovedMappings.entries) {
+    final sourceCollectionID = automaticBackupCollectionIDsByPath[entry.key];
+    if (sourceCollectionID == null) continue;
+    final localIDsByDestinationFolderName = <String, Set<String>>{};
+    for (final localID in entry.value) {
+      final destinationFolderName = destinationFolderNamesByLocalID[localID];
+      if (destinationFolderName == null) continue;
+      localIDsByDestinationFolderName
+          .putIfAbsent(destinationFolderName, () => <String>{})
+          .add(localID);
+    }
+    for (final entry in localIDsByDestinationFolderName.entries) {
+      pendingMoves.add(
+        PendingDeviceFolderMove(
+          sourceCollectionID: sourceCollectionID,
+          destinationFolderName: entry.key,
+          localIDs: entry.value,
+        ),
+      );
+    }
+  }
+  return pendingMoves;
+}
+
 class LocalSyncService {
   final _logger = Logger("LocalSyncService");
   final _db = FilesDB.instance;
@@ -217,6 +260,12 @@ class LocalSyncService {
     _logger.info(
       "refreshDeviceFolderCountAndCover + allLocalAssets took ${stopwatch.elapsedMilliseconds}ms ",
     );
+    final deviceFolderNamesByPath = explicitlyRemovedPathToLocalIDs.isEmpty
+        ? const <String, String>{}
+        : {
+            for (final deviceCollection in await _db.getDeviceCollections())
+              deviceCollection.id: deviceCollection.name,
+          };
     final int ownerID = Configuration.instance.getUserIDV2();
     final existingLocalFileIDs = await _db.getExistingLocalFileIDs(ownerID);
     final localDiffResult = await getDiffFromExistingImport(
@@ -240,11 +289,19 @@ class LocalSyncService {
               localDiffResult.deletePathToLocalIDs![entry.key]!,
             ),
       };
+      final pendingMoves = _pendingDeviceFolderMoves(
+        explicitlyRemovedMappings: explicitlyRemovedMappings,
+        localAssets: localAssets,
+        automaticBackupCollectionIDsByPath:
+            previousAutomaticBackupCollectionIDsByPath,
+        deviceFolderNamesByPath: deviceFolderNamesByPath,
+      );
       await _db.reconcileRemovedDeviceFolderMappings(
         mappingsToRemove: localDiffResult.deletePathToLocalIDs!,
         pendingMappingsToRemove: explicitlyRemovedMappings,
         automaticBackupCollectionIDsByPath:
             previousAutomaticBackupCollectionIDsByPath,
+        pendingMoves: pendingMoves,
       );
       hasAnyMappingChanged = true;
     }
