@@ -43,11 +43,11 @@ internal class PhotosPlatformChannelRouter : MethodChannel.MethodCallHandler {
     }
 
     fun detachActivityForConfigChanges() {
-        deviceFolderTransferAdapter.detachActivity(cancelPendingTransfer = false)
+        deviceFolderTransferAdapter.detachActivity(cancelPendingConsent = false)
     }
 
     fun detachActivity() {
-        deviceFolderTransferAdapter.detachActivity(cancelPendingTransfer = true)
+        deviceFolderTransferAdapter.detachActivity(cancelPendingConsent = true)
     }
 
     private companion object {

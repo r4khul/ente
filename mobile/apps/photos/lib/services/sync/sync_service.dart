@@ -17,7 +17,6 @@ import 'package:photos/main.dart';
 import 'package:photos/models/file/file_type.dart';
 import 'package:photos/module/upload/service/file_uploader.dart';
 import 'package:photos/service_locator.dart';
-import 'package:photos/services/device_folder_transfer_coordinator.dart';
 import 'package:photos/services/language_service.dart';
 import 'package:photos/services/notification_service.dart';
 import 'package:photos/services/sync/large_backup_session_tracker.dart';
@@ -231,7 +230,6 @@ class SyncService {
   }
 
   Future<void> _doSync() async {
-    await DeviceFolderTransferCoordinator.instance.recoverPendingTransfers();
     _logger.info("[SYNC] Starting local sync");
     await _localSyncService.sync();
     if (isLocalGalleryMode) {

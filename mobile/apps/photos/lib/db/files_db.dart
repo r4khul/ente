@@ -484,10 +484,7 @@ class FilesDB with SqlDbBase {
           withoutIdParams.clear();
         }
       } else {
-        withIdParams.add([
-          ..._getParameterSetForFile(file),
-          ?autoBackupPathID,
-        ]);
+        withIdParams.add([..._getParameterSetForFile(file), ?autoBackupPathID]);
         if (withIdParams.length == 400) {
           await _insertBatch(
             conflictAlgorithm,
@@ -1357,78 +1354,6 @@ class FilesDB with SqlDbBase {
       ' AND $columnLocalID IS NULL',
       [localID, uploadedID],
     );
-  }
-
-  Future<void> rebindDeviceFolderMove({
-    required String sourcePathID,
-    required String targetPathID,
-    required Map<String, String> destinationLocalIDs,
-  }) async {
-    if (destinationLocalIDs.isEmpty) return;
-    final db = await sqliteAsyncDB;
-    await db.writeTransaction((tx) async {
-      final mappingDeletes = <List<Object?>>[];
-      final mappingInserts = <List<Object?>>[];
-      final autoBackupQueueReleases = <List<Object?>>[];
-      final localIDRebindings = <List<Object?>>[];
-      final duplicateDeletes = <List<Object?>>[];
-      for (final entry in destinationLocalIDs.entries) {
-        mappingDeletes.add([entry.key, sourcePathID]);
-        mappingInserts.add([entry.value, targetPathID]);
-        autoBackupQueueReleases.add([entry.key, sourcePathID]);
-        if (entry.key != entry.value) {
-          localIDRebindings.add([entry.value, entry.key]);
-          duplicateDeletes.add([entry.key, entry.value]);
-        }
-      }
-      for (
-        var start = 0;
-        start < autoBackupQueueReleases.length;
-        start += 400
-      ) {
-        final end = (start + 400).clamp(0, autoBackupQueueReleases.length);
-        await tx.executeBatch(
-          'UPDATE $filesTable SET $columnCollectionID = NULL, '
-          '$columnAutoBackupPathID = NULL '
-          'WHERE $columnLocalID = ? '
-          'AND ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1) '
-          'AND $columnAutoBackupPathID = ?;',
-          autoBackupQueueReleases.sublist(start, end),
-        );
-      }
-      for (var start = 0; start < localIDRebindings.length; start += 400) {
-        final end = (start + 400).clamp(0, localIDRebindings.length);
-        await tx.executeBatch(
-          'UPDATE OR IGNORE $filesTable SET $columnLocalID = ? '
-          'WHERE $columnLocalID = ?;',
-          localIDRebindings.sublist(start, end),
-        );
-      }
-      for (var start = 0; start < duplicateDeletes.length; start += 400) {
-        final end = (start + 400).clamp(0, duplicateDeletes.length);
-        await tx.executeBatch(
-          'DELETE FROM $filesTable WHERE $columnLocalID = ? AND EXISTS ('
-          'SELECT 1 FROM $filesTable AS destination '
-          'WHERE destination.$columnLocalID = ? '
-          'AND COALESCE(destination.$columnUploadedFileID, -1) = '
-          'COALESCE($filesTable.$columnUploadedFileID, -1) '
-          'AND COALESCE(destination.$columnCollectionID, -1) = '
-          'COALESCE($filesTable.$columnCollectionID, -1));',
-          duplicateDeletes.sublist(start, end),
-        );
-      }
-      for (var start = 0; start < mappingDeletes.length; start += 400) {
-        final end = (start + 400).clamp(0, mappingDeletes.length);
-        await tx.executeBatch(
-          'DELETE FROM $deviceFilesTable WHERE id = ? AND path_id = ?;',
-          mappingDeletes.sublist(start, end),
-        );
-        await tx.executeBatch(
-          'INSERT OR IGNORE INTO $deviceFilesTable (id, path_id) VALUES (?, ?);',
-          mappingInserts.sublist(start, end),
-        );
-      }
-    });
   }
 
   Future<List<EnteFile>> getUploadedFilesForLocalIDs(

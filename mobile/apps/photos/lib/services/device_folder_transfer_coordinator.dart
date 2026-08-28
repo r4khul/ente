@@ -1,11 +1,7 @@
-import 'dart:io';
-
 import 'package:collection/collection.dart';
 import 'package:ente_photos_platform/ente_photos_platform.dart';
 import 'package:logging/logging.dart';
-import 'package:photos/core/configuration.dart';
 import 'package:photos/core/event_bus.dart';
-import 'package:photos/core/user_config.dart';
 import 'package:photos/db/device_files_db.dart';
 import 'package:photos/db/files_db.dart';
 import 'package:photos/events/local_photos_updated_event.dart';
@@ -13,8 +9,6 @@ import 'package:photos/models/device_collection.dart';
 import 'package:photos/models/file/file.dart';
 import 'package:photos/services/collections_service.dart';
 import 'package:photos/services/sync/local_sync_service.dart';
-import 'package:photos/services/sync/remote_sync_service.dart';
-import 'package:uuid/uuid.dart';
 
 class DeviceFolderTransferCoordinator {
   DeviceFolderTransferCoordinator._();
@@ -31,19 +25,93 @@ class DeviceFolderTransferCoordinator {
     int? cloudMoveSourceCollectionID,
   }) async {
     final result = await LocalSyncService.instance.getLock().synchronized(
-      () => _transfer(
-        request: request,
-        source: source,
-        destination: destination,
-        cloudMoveSourceCollectionID: cloudMoveSourceCollectionID,
-      ),
+      () async {
+        final folders = await FilesDB.instance.getDeviceCollections();
+        final currentSource = folders.firstWhereOrNull(
+          (folder) => folder.id == source.id,
+        );
+        final currentDestination = folders.firstWhereOrNull(
+          (folder) => folder.id == destination.id,
+        );
+        if (currentSource == null || currentDestination == null) {
+          throw StateError('The selected device folder is no longer available');
+        }
+        if (source.shouldBackup != currentSource.shouldBackup ||
+            destination.shouldBackup != currentDestination.shouldBackup ||
+            (cloudMoveSourceCollectionID != null &&
+                (!currentSource.shouldBackup ||
+                    currentSource.collectionID !=
+                        cloudMoveSourceCollectionID))) {
+          throw StateError('The device folder backup state changed');
+        }
+        final expectedCloudMoveIDs = <String, Set<int>>{};
+        if (cloudMoveSourceCollectionID != null) {
+          for (final file in await FilesDB.instance.getUploadedFilesForLocalIDs(
+            request.sourceLocalIDs,
+            collectionID: cloudMoveSourceCollectionID,
+          )) {
+            final localID = file.localID;
+            final uploadedID = file.uploadedFileID;
+            if (localID != null && uploadedID != null) {
+              expectedCloudMoveIDs
+                  .putIfAbsent(localID, () => {})
+                  .add(uploadedID);
+            }
+          }
+          if (expectedCloudMoveIDs.isEmpty) {
+            throw StateError('The source backup collection changed');
+          }
+        }
+
+        // Native MediaStore changes are deliberately not journaled. If the app
+        // stops before this transaction, the next syncAll reconciles them just
+        // like a move made in the system Files app.
+        final result = await _client.transfer(request);
+        if (result.destinations.isEmpty) return result;
+
+        await reconcileDeviceFolderTransfer(
+          request.operation,
+          sourcePathID: currentSource.id,
+          targetPathID: currentDestination.id,
+          destinations: result.destinationLocalIDs,
+        );
+        if (request.operation == DeviceFolderTransferOperation.move &&
+            cloudMoveSourceCollectionID != null) {
+          final expectedIDs = result.successLocalIDs
+              .expand(
+                (localID) => expectedCloudMoveIDs[localID] ?? const <int>{},
+              )
+              .toSet();
+          final files = await FilesDB.instance.getUploadedFilesForLocalIDs(
+            result.destinations.values.map(
+              (destination) => destination.localID,
+            ),
+            collectionID: cloudMoveSourceCollectionID,
+          );
+          final actualIDs = files
+              .map((file) => file.uploadedFileID)
+              .whereType<int>()
+              .toSet();
+          if (!actualIDs.containsAll(expectedIDs)) {
+            throw StateError('Could not resolve files for the Ente move');
+          }
+          await _moveFilesInEnte(
+            files
+                .where((file) => expectedIDs.contains(file.uploadedFileID))
+                .toList(),
+            currentDestination,
+            cloudMoveSourceCollectionID,
+          );
+        }
+        return result;
+      },
     );
-    if (result.successLocalIDs.isNotEmpty) {
+    if (result.destinations.isNotEmpty) {
       try {
         await LocalSyncService.instance.syncAll();
       } catch (error, stackTrace) {
         _logger.warning(
-          'Could not refresh local state after device-folder ${request.operation.name}',
+          'Could not refresh local state after device-folder transfer',
           error,
           stackTrace,
         );
@@ -60,183 +128,54 @@ class DeviceFolderTransferCoordinator {
     return result;
   }
 
-  Future<DeviceFolderTransferResult> _transfer({
-    required DeviceFolderTransferRequest request,
-    required DeviceCollection source,
-    required DeviceCollection destination,
-    required int? cloudMoveSourceCollectionID,
+  static Future<void> reconcileDeviceFolderTransfer(
+    DeviceFolderTransferOperation operation, {
+    required String sourcePathID,
+    required String targetPathID,
+    required Map<String, String> destinations,
   }) async {
-    final (currentSource, currentDestination) = await _currentFolders(
-      source,
-      destination,
-    );
-    _validateFolderState(
-      source: source,
-      destination: destination,
-      currentSource: currentSource,
-      currentDestination: currentDestination,
-      cloudMoveSourceCollectionID: cloudMoveSourceCollectionID,
-    );
-
-    final transferID = const Uuid().v4();
-    final ownerID = Configuration.instance.getUserIDV2();
-    final result = await _client.transfer(
-      request.copyWith(
-        transferID: transferID,
-        recoveryContext: {
-          'operation': request.operation.name,
-          'sourceFolderID': currentSource.id,
-          'targetFolderID': currentDestination.id,
-          'ownerID': ownerID,
-          if (cloudMoveSourceCollectionID != null)
-            'cloudMoveSourceCollectionID': cloudMoveSourceCollectionID,
-        },
-      ),
-    );
-
-    await _completeTransfer(
-      transferID: transferID,
-      operation: request.operation,
-      source: currentSource,
-      destination: currentDestination,
-      result: result,
-      cloudMoveSourceCollectionID: cloudMoveSourceCollectionID,
-      cloudMoveStarted: false,
-      cloudMoveCompleted: false,
-    );
-    return result;
-  }
-
-  Future<void> recoverPendingTransfers() async {
-    if (!Platform.isAndroid) return;
-    late final List<DeviceFolderTransferRecovery> recoveries;
-    try {
-      recoveries = await _client.pendingRecoveries();
-    } catch (error, stackTrace) {
-      _logger.warning(
-        'Could not read device-folder transfer recovery records',
-        error,
-        stackTrace,
-      );
-      return;
-    }
-    for (final recovery in recoveries) {
-      try {
-        if (recovery.ownerID != Configuration.instance.getUserIDV2()) {
-          continue;
+    final db = await FilesDB.instance.sqliteAsyncDB;
+    await db.writeTransaction((tx) async {
+      for (final entries in destinations.entries.slices(400)) {
+        if (operation == DeviceFolderTransferOperation.move) {
+          await tx.executeBatch(
+            'UPDATE ${FilesDB.filesTable} SET ${FilesDB.columnCollectionID} = NULL, '
+            '${FilesDB.columnAutoBackupPathID} = NULL WHERE ${FilesDB.columnLocalID} = ? '
+            'AND (${FilesDB.columnUploadedFileID} IS NULL OR ${FilesDB.columnUploadedFileID} = -1) '
+            'AND ${FilesDB.columnAutoBackupPathID} = ?;',
+            entries.map((entry) => [entry.key, sourcePathID]).toList(),
+          );
+          final changedIDs = entries
+              .where((entry) => entry.key != entry.value)
+              .toList();
+          if (changedIDs.isNotEmpty) {
+            await tx.executeBatch(
+              'UPDATE OR IGNORE ${FilesDB.filesTable} SET ${FilesDB.columnLocalID} = ? '
+              'WHERE ${FilesDB.columnLocalID} = ?;',
+              changedIDs.map((entry) => [entry.value, entry.key]).toList(),
+            );
+            await tx.executeBatch(
+              'DELETE FROM ${FilesDB.filesTable} WHERE ${FilesDB.columnLocalID} = ? AND EXISTS ('
+              'SELECT 1 FROM ${FilesDB.filesTable} AS destination '
+              'WHERE destination.${FilesDB.columnLocalID} = ? '
+              'AND COALESCE(destination.${FilesDB.columnUploadedFileID}, -1) = '
+              'COALESCE(${FilesDB.filesTable}.${FilesDB.columnUploadedFileID}, -1) '
+              'AND COALESCE(destination.${FilesDB.columnCollectionID}, -1) = '
+              'COALESCE(${FilesDB.filesTable}.${FilesDB.columnCollectionID}, -1));',
+              changedIDs.map((entry) => [entry.key, entry.value]).toList(),
+            );
+          }
+          await tx.executeBatch(
+            'DELETE FROM ${FilesDB.deviceFilesTable} WHERE id = ? AND path_id = ?;',
+            entries.map((entry) => [entry.key, sourcePathID]).toList(),
+          );
         }
-        final collections = await FilesDB.instance.getDeviceCollections();
-        final source = collections
-            .where((collection) => collection.id == recovery.sourceFolderID)
-            .firstOrNull;
-        final destination = collections
-            .where((collection) => collection.id == recovery.targetFolderID)
-            .firstOrNull;
-        if (source == null || destination == null) continue;
-        await LocalSyncService.instance.getLock().synchronized(
-          () => _completeTransfer(
-            transferID: recovery.transferID,
-            operation: recovery.operation,
-            source: source,
-            destination: destination,
-            result: recovery.result,
-            cloudMoveSourceCollectionID: recovery.cloudMoveSourceCollectionID,
-            cloudMoveStarted: recovery.cloudMoveStarted,
-            cloudMoveCompleted: recovery.cloudMoveCompleted,
-          ),
-        );
-      } catch (error, stackTrace) {
-        _logger.warning(
-          'Could not recover device-folder move ${recovery.transferID}',
-          error,
-          stackTrace,
+        await tx.executeBatch(
+          'INSERT OR IGNORE INTO ${FilesDB.deviceFilesTable} (id, path_id) VALUES (?, ?);',
+          entries.map((entry) => [entry.value, targetPathID]).toList(),
         );
       }
-    }
-  }
-
-  Future<void> _completeTransfer({
-    required String transferID,
-    required DeviceFolderTransferOperation operation,
-    required DeviceCollection source,
-    required DeviceCollection destination,
-    required DeviceFolderTransferResult result,
-    required int? cloudMoveSourceCollectionID,
-    required bool cloudMoveStarted,
-    required bool cloudMoveCompleted,
-  }) async {
-    final destinations = result.destinations;
-    if (destinations.isEmpty) {
-      if (!result.requiresRecovery) {
-        await _finish(transferID);
-      }
-      return;
-    }
-
-    if (operation == DeviceFolderTransferOperation.move) {
-      await FilesDB.instance.rebindDeviceFolderMove(
-        sourcePathID: source.id,
-        targetPathID: destination.id,
-        destinationLocalIDs: {
-          for (final entry in destinations.entries)
-            entry.key: entry.value.localID,
-        },
-      );
-    }
-
-    if (!result.requiresRecovery &&
-        operation == DeviceFolderTransferOperation.move &&
-        cloudMoveSourceCollectionID != null &&
-        !cloudMoveCompleted) {
-      if (cloudMoveStarted) {
-        await RemoteSyncService.instance.sync(silently: true);
-      }
-      final files = await FilesDB.instance.getUploadedFilesForLocalIDs(
-        destinations.values.map((destination) => destination.localID),
-        collectionID: cloudMoveSourceCollectionID,
-      );
-      await _client.markCloudMoveStarted(transferID);
-      await _moveFilesInEnte(files, destination, cloudMoveSourceCollectionID);
-      await _client.markCloudMoveCompleted(transferID);
-    }
-    if (!result.requiresRecovery) {
-      await _finish(transferID);
-    }
-  }
-
-  Future<(DeviceCollection, DeviceCollection)> _currentFolders(
-    DeviceCollection source,
-    DeviceCollection destination,
-  ) async {
-    final folders = await FilesDB.instance.getDeviceCollections();
-    final currentSource = folders
-        .where((folder) => folder.id == source.id)
-        .firstOrNull;
-    final currentDestination = folders
-        .where((folder) => folder.id == destination.id)
-        .firstOrNull;
-    if (currentSource == null || currentDestination == null) {
-      throw StateError('The selected device folder is no longer available');
-    }
-    return (currentSource, currentDestination);
-  }
-
-  void _validateFolderState({
-    required DeviceCollection source,
-    required DeviceCollection destination,
-    required DeviceCollection currentSource,
-    required DeviceCollection currentDestination,
-    required int? cloudMoveSourceCollectionID,
-  }) {
-    if (source.shouldBackup != currentSource.shouldBackup ||
-        destination.shouldBackup != currentDestination.shouldBackup) {
-      throw StateError('The device folder backup state changed');
-    }
-    if (cloudMoveSourceCollectionID != null &&
-        (!currentSource.shouldBackup ||
-            currentSource.collectionID != cloudMoveSourceCollectionID)) {
-      throw StateError('The source backup collection changed');
-    }
+    });
   }
 
   Future<void> _moveFilesInEnte(
@@ -245,31 +184,23 @@ class DeviceFolderTransferCoordinator {
     int sourceCollectionID,
   ) async {
     if (files.isEmpty) return;
-    final target = await _ensureBackupCollection(destination);
-    final movableFiles = files
+    final target = destination.hasCollectionID()
+        ? destination.collectionID!
+        : (await CollectionsService.instance.getOrCreateForPath(
+            destination.name,
+          )).id;
+    if (!destination.hasCollectionID()) {
+      await FilesDB.instance.updateDeviceCollection(destination.id, target);
+    }
+    final movable = files
         .where((file) => file.collectionID == sourceCollectionID)
-        .map((file) => file.copyWith())
         .toList();
-    if (movableFiles.isEmpty || sourceCollectionID == target) return;
-    await CollectionsService.instance.move(
-      movableFiles,
-      toCollectionID: target,
-      fromCollectionID: sourceCollectionID,
-    );
+    if (movable.isNotEmpty && target != sourceCollectionID) {
+      await CollectionsService.instance.move(
+        movable.map((file) => file.copyWith()).toList(),
+        toCollectionID: target,
+        fromCollectionID: sourceCollectionID,
+      );
+    }
   }
-
-  Future<int> _ensureBackupCollection(DeviceCollection destination) async {
-    if (destination.hasCollectionID()) return destination.collectionID!;
-    final collection = await CollectionsService.instance.getOrCreateForPath(
-      destination.name,
-    );
-    await FilesDB.instance.updateDeviceCollection(
-      destination.id,
-      collection.id,
-    );
-    return collection.id;
-  }
-
-  Future<void> _finish(String transferID) =>
-      _client.acknowledgeRecovery(transferID);
 }

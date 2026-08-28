@@ -10,8 +10,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import java.io.IOException
-import org.json.JSONArray
-import org.json.JSONObject
 
 internal class DeviceFolderTransferService(private val context: Context) {
     fun supportedOperations(): List<String> =
@@ -23,370 +21,71 @@ internal class DeviceFolderTransferService(private val context: Context) {
         candidateIDs: List<String>,
         sourceLocalIDs: List<String>,
     ): List<String> {
-        val resolvedOperation = operation ?: return emptyList()
-        if (!supportsOperation(resolvedOperation)) return emptyList()
-        val sourceItems = sourceLocalIDs.map(::mediaItem)
-        if (sourceItems.any { it == null }) return emptyList()
-        val resolvedSourceItems = sourceItems.filterNotNull()
-        if (resolvedSourceItems.any { it.bucketID != sourceFolderID }) return emptyList()
-        if (resolvedSourceItems.isEmpty()) return emptyList()
+        if (!supports(operation)) return emptyList()
+        val sources = sourceLocalIDs.map(::mediaItem)
+        if (sources.isEmpty() || sources.any { it?.bucketID != sourceFolderID }) return emptyList()
         return candidateIDs.filter { candidateID ->
             val target = destination(candidateID) ?: return@filter false
-            resolvedSourceItems.all { source ->
-                transferPlan(resolvedOperation, source, target) != null
-            }
+            sources.filterNotNull().all { plan(operation!!, it, target) != null }
         }
     }
 
     fun transfer(
-        transferID: String?,
-        recoveryContext: Map<String, Any>?,
         operation: String,
         sourceFolderID: String,
         targetFolderID: String,
         sourceLocalIDs: List<String>,
     ): Map<String, Any> {
-        val destinations = mutableMapOf<String, TransferredMediaItem>()
+        val destinations = mutableMapOf<String, Map<String, String>>()
         val failures = mutableMapOf<String, String>()
-        val pendingTransfers = mutableMapOf<String, PendingTransfer>()
-        if (!supportsOperation(operation)) {
+        if (!supports(operation)) {
             sourceLocalIDs.forEach { failures[it] = "unsupported" }
             return result(destinations, failures)
         }
-        if (transferID == null || recoveryContext == null) {
-            sourceLocalIDs.forEach { failures[it] = "failed" }
-            return result(destinations, failures)
-        }
-        fun persistProgress() {
-            transferID?.let {
-                persistRecoveryResult(
-                    it,
-                    recoveryContext,
-                    result(destinations, failures, pendingTransfers),
-                    pendingTransfers,
-                )
-            }
-        }
         val target = destination(targetFolderID)
-        if (target == null || sourceFolderID == targetFolderID) {
+        if (target == null || targetFolderID == sourceFolderID) {
             sourceLocalIDs.forEach { failures[it] = "ineligibleDestination" }
             return result(destinations, failures)
         }
-        for ((index, localID) in sourceLocalIDs.withIndex()) {
-            if (localID.toLongOrNull() == null) {
-                failures[localID] = "missingSource"
-                continue
-            }
-            if (hasUnacknowledgedTransferFor(localID)) {
-                // A copy can leave the source in place, so retrying before the
-                // prior journal has been reconciled would create a second copy.
-                failures[localID] = "failed"
-                continue
-            }
-            var shouldPersistRecovery = false
-            var preparedTransfer: PendingTransfer? = null
-            var checkpointFailedAfterTransfer = false
-
-            fun restoreUncheckpointedTransfer() {
-                preparedTransfer?.let { pending ->
-                    if (destinations.containsKey(localID) && !pendingTransfers.containsKey(localID)) {
-                        pendingTransfers[localID] = pending
-                        destinations.remove(localID)
-                    }
-                }
-            }
-
+        sourceLocalIDs.forEach { localID ->
             try {
                 val source = mediaItem(localID)
-                if (source == null) {
+                if (source == null || source.bucketID != sourceFolderID) {
                     failures[localID] = "missingSource"
-                } else if (source.bucketID != sourceFolderID) {
-                    failures[localID] = "missingSource"
+                    return@forEach
+                }
+                val plan = plan(operation, source, target)
+                if (plan == null) {
+                    failures[localID] = "ineligibleDestination"
+                    return@forEach
+                }
+                destinations[localID] = if (operation == "copy") {
+                    copy(source, target, plan.anchor)
+                } else if (plan.requiresCopy) {
+                    val copied = copy(source, target, plan.anchor)
+                    if (context.contentResolver.delete(source.uri, null, null) != 1) {
+                        throw IOException("Could not remove source after copying")
+                    }
+                    copied
                 } else {
-                    val plan = transferPlan(operation, source, target)
-                    if (plan == null) {
-                        failures[localID] = "ineligibleDestination"
-                    } else {
-                        try {
-                            val transferred = if (operation == "copy") {
-                                copy(source, target, plan.anchor) { created ->
-                                    PendingTransfer(
-                                        kind = PendingTransferKind.copy,
-                                        sourceUri = source.uri,
-                                        destinationUri = created.uri,
-                                        destination = created,
-                                        sourceDisplayName = source.displayName,
-                                        sourceRelativePath = source.relativePath,
-                                        targetRelativePath = target.relativePath,
-                                    ).also { pending ->
-                                        preparedTransfer = pending
-                                        pendingTransfers[localID] = pending
-                                        persistProgress()
-                                    }
-                                }
-                            } else move(
-                                source,
-                                target,
-                                plan,
-                                onPrepared = { pending ->
-                                    preparedTransfer = pending
-                                    pendingTransfers[localID] = pending
-                                    persistProgress()
-                                },
-                            )
-                            destinations[localID] = transferred
-                            pendingTransfers.remove(localID)
-                            shouldPersistRecovery = true
-                        } catch (error: Exception) {
-                            preparedTransfer?.let { pending ->
-                                if (isRolledBack(pending)) {
-                                    pendingTransfers.remove(localID)
-                                    destinations.remove(localID)
-                                    shouldPersistRecovery = true
-                                }
-                            }
-                            throw error
-                        }
-                    }
+                    relocate(source, target)
                 }
-                if (shouldPersistRecovery) {
-                    try {
-                        persistProgress()
-                    } catch (error: Exception) {
-                        // The preparation checkpoint is still the durable
-                        // truth. Keep reporting the completed native mapping,
-                        // retain that checkpoint for recovery, and do not
-                        // begin another irreversible operation in this batch.
-                        preparedTransfer?.let { pendingTransfers[localID] = it }
-                        checkpointFailedAfterTransfer = true
-                        Log.e(
-                            TAG,
-                            "Could not checkpoint completed $operation media=$localID",
-                            error,
-                        )
-                    }
-                }
-            } catch (security: SecurityException) {
-                restoreUncheckpointedTransfer()
+            } catch (error: SecurityException) {
                 failures[localID] = "permissionDenied"
             } catch (error: Exception) {
-                restoreUncheckpointedTransfer()
-                Log.e(
-                    TAG,
-                    "Failed to $operation media=$localID from=$sourceFolderID to=$targetFolderID " +
-                        "relativePath=${target.relativePath}",
-                    error,
-                )
+                Log.e(TAG, "Could not $operation media=$localID", error)
                 failures[localID] = "failed"
             }
-            if (checkpointFailedAfterTransfer) {
-                sourceLocalIDs.drop(index + 1).forEach { remainingID ->
-                    failures.putIfAbsent(remainingID, "failed")
-                }
-                break
-            }
         }
-        val result = result(destinations, failures, pendingTransfers)
-        return result
+        return result(destinations, failures)
     }
 
-    fun pendingRecoveries(): List<Map<String, Any>> =
-        context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
-            .all
-            .mapNotNull { (transferID, raw) ->
-                (raw as? String)?.let { repairRecovery(transferID, it) }
-                    ?.let { recoveryRecord(transferID, it) }
-            }
+    fun mediaUri(localID: String): Uri? = mediaItem(localID)?.uri
 
-    fun markCloudMoveStarted(transferID: String): Boolean =
-        markCloudMoveState(transferID, "cloudMoveStarted")
-
-    fun markCloudMoveCompleted(transferID: String): Boolean =
-        markCloudMoveState(transferID, "cloudMoveCompleted")
-
-    private fun markCloudMoveState(transferID: String, key: String): Boolean {
-        val preferences = context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
-        val raw = preferences.getString(transferID, null) ?: return false
-        val json = try {
-            JSONObject(raw)
-        } catch (error: Exception) {
-            Log.e(TAG, "Could not update device-folder transfer recovery result", error)
-            return false
-        }
-        json.put(key, true)
-        return preferences.edit().putString(transferID, json.toString()).commit()
-    }
-
-    private fun repairRecovery(transferID: String, raw: String): String? {
-        val json = try {
-            JSONObject(raw)
-        } catch (error: Exception) {
-            Log.e(TAG, "Could not repair device-folder transfer recovery record", error)
-            return null
-        }
-        val pendingTransfers = json.optJSONObject("pendingTransfers")
-            ?: json.optJSONObject("pendingMoves")
-            ?: return raw
-        if (pendingTransfers.length() == 0) return raw
-        val destinations = json.optJSONObject("destinations") ?: JSONObject().also {
-            json.put("destinations", it)
-        }
-        val failures = json.optJSONObject("failures") ?: JSONObject().also {
-            json.put("failures", it)
-        }
-        val sourceIDs = buildList { pendingTransfers.keys().forEach(::add) }
-        for (sourceID in sourceIDs) {
-            val pending = try {
-                PendingTransfer.fromJson(pendingTransfers.getJSONObject(sourceID))
-            } catch (error: Exception) {
-                Log.e(TAG, "Could not parse pending device-folder transfer", error)
-                return null
-            }
-            when (pending.kind) {
-                PendingTransferKind.copy -> {
-                    val destinationUri = pending.destinationUri ?: return null
-                    if (mediaIsPublished(destinationUri)) {
-                        destinations.put(sourceID, pending.destination.toJson())
-                        failures.remove(sourceID)
-                    } else {
-                        val removed = !mediaExists(destinationUri) ||
-                            runCatching {
-                                context.contentResolver.delete(destinationUri, null, null) == 1 ||
-                                    !mediaExists(destinationUri)
-                            }.getOrDefault(false)
-                        if (!removed) return null
-                        destinations.remove(sourceID)
-                        failures.put(sourceID, "failed")
-                    }
-                }
-
-                PendingTransferKind.copyDelete -> {
-                    val sourceExists = mediaExists(pending.sourceUri)
-                    val destinationUri = pending.destinationUri ?: return null
-                    val destinationExists = mediaExists(destinationUri)
-                    if (sourceExists) {
-                        val removed = !destinationExists ||
-                            runCatching {
-                                context.contentResolver.delete(destinationUri, null, null) == 1 ||
-                                    !mediaExists(destinationUri)
-                            }.getOrDefault(false)
-                        if (!removed) return null
-                        destinations.remove(sourceID)
-                        failures.put(sourceID, "failed")
-                    } else if (destinationExists) {
-                        destinations.put(sourceID, pending.destination.toJson())
-                        failures.remove(sourceID)
-                    } else {
-                        destinations.remove(sourceID)
-                        failures.put(sourceID, "failed")
-                    }
-                }
-
-                PendingTransferKind.relocate -> {
-                    val state = mediaState(pending.sourceUri) ?: return null
-                    when (state) {
-                        MediaState(pending.targetRelativePath, pending.destination.displayName) -> {
-                            destinations.put(sourceID, pending.destination.toJson())
-                            failures.remove(sourceID)
-                        }
-
-                        MediaState(pending.sourceRelativePath, pending.sourceDisplayName) -> {
-                            destinations.remove(sourceID)
-                            failures.put(sourceID, "failed")
-                        }
-
-                        else -> return null
-                    }
-                }
-            }
-            pendingTransfers.remove(sourceID)
-        }
-        json.remove("pendingMoves")
-        val updated = json.toString()
-        val persisted = context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putString(transferID, updated)
-            .commit()
-        return updated.takeIf { persisted }
-    }
-
-    private fun recoveryRecord(transferID: String, raw: String): Map<String, Any>? {
-        return try {
-            val json = JSONObject(raw)
-            val failures = json.getJSONObject("failures")
-            val destinationMap = mutableMapOf<String, Map<String, Any?>>()
-            val failureMap = mutableMapOf<String, String>()
-            val destinations = json.optJSONObject("destinations")
-            destinations?.keys()?.forEach { key ->
-                val destination = destinations.getJSONObject(key)
-                destinationMap[key] = mapOf(
-                    "localID" to destination.getString("localID"),
-                    "displayName" to destination.optString("displayName").takeIf(String::isNotEmpty),
-                )
-            }
-            if (destinations == null) {
-                json.optJSONObject("destinationLocalIDs")?.let { legacy ->
-                    legacy.keys().forEach { key ->
-                        val destinationID = legacy.getString(key)
-                        destinationMap[key] = mapOf(
-                            "localID" to destinationID,
-                            "displayName" to mediaItem(destinationID)?.displayName,
-                        )
-                    }
-                }
-            }
-            failures.keys().forEach { key -> failureMap[key] = failures.getString(key) }
-            val recovery = mutableMapOf<String, Any>(
-                "transferID" to transferID,
-                "operation" to json.optString("operation", "move"),
-                "sourceFolderID" to json.getString("sourceFolderID"),
-                "targetFolderID" to json.getString("targetFolderID"),
-                "ownerID" to json.getLong("ownerID"),
-                "cloudMoveStarted" to json.optBoolean("cloudMoveStarted", false),
-                "cloudMoveCompleted" to json.optBoolean("cloudMoveCompleted", false),
-                "destinations" to destinationMap,
-                "failures" to failureMap,
-                "requiresRecovery" to
-                    ((json.optJSONObject("pendingTransfers")?.length() ?: 0) > 0),
-            )
-            if (json.has("cloudMoveSourceCollectionID")) {
-                recovery["cloudMoveSourceCollectionID"] =
-                    json.getLong("cloudMoveSourceCollectionID")
-            }
-            recovery
-        } catch (error: Exception) {
-            Log.e(TAG, "Could not read device-folder transfer recovery record", error)
-            null
-        }
-    }
-
-    fun acknowledgeRecovery(transferID: String): Boolean =
-        context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .remove(transferID)
-            .commit()
-
-    private fun hasUnacknowledgedTransferFor(localID: String): Boolean =
-        context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
-            .all
-            .values
-            .any { raw ->
-                val json = try {
-                    JSONObject(raw as? String ?: return@any true)
-                } catch (error: Exception) {
-                    // A corrupt journal must be examined during recovery, not
-                    // bypassed by a retry that could duplicate media.
-                    return@any true
-                }
-                json.optJSONObject("destinations")?.has(localID) == true ||
-                    json.optJSONObject("destinationLocalIDs")?.has(localID) == true ||
-                    json.optJSONObject("pendingTransfers")?.has(localID) == true ||
-                    json.optJSONObject("pendingMoves")?.has(localID) == true
-            }
-
-    fun mediaUri(localID: String): Uri? {
-        return mediaItem(localID)?.uri
-    }
+    private fun result(
+        destinations: Map<String, Map<String, String>>,
+        failures: Map<String, String>,
+    ): Map<String, Any> = mapOf("destinations" to destinations, "failures" to failures)
 
     private fun mediaItem(localID: String): MediaItem? {
         val id = localID.toLongOrNull() ?: return null
@@ -409,316 +108,88 @@ internal class DeviceFolderTransferService(private val context: Context) {
             if (!cursor.moveToFirst()) return@use null
             val mediaType = cursor.getInt(0)
             val volumeName = cursor.getString(1) ?: return@use null
-            val displayName = cursor.getString(2) ?: return@use null
-            val size = cursor.takeUnless { it.isNull(3) }?.getLong(3)
-            val dateTaken = cursor.takeUnless { it.isNull(4) }?.getLong(4)
+            val name = cursor.getString(2) ?: return@use null
             val bucketID = cursor.getString(5) ?: return@use null
-            val mimeType = cursor.takeUnless { it.isNull(6) }?.getString(6)
-            val relativePath = cursor.getString(7) ?: return@use null
+            if (cursor.getString(7) == null) return@use null
             val collection = mediaCollection(mediaType, volumeName) ?: return@use null
             MediaItem(
                 ContentUris.withAppendedId(collection, id),
                 mediaType,
-                displayName,
                 volumeName,
-                size,
-                dateTaken,
+                name,
+                cursor.takeUnless { it.isNull(3) }?.getLong(3),
+                cursor.takeUnless { it.isNull(4) }?.getLong(4),
                 bucketID,
-                mimeType,
-                relativePath,
+                cursor.takeUnless { it.isNull(6) }?.getString(6),
             )
         }
     }
 
-    private fun mediaCollection(mediaType: Int, volumeName: String): Uri? =
-        when (mediaType) {
-            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE ->
-                MediaStore.Images.Media.getContentUri(volumeName)
-
-            MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO ->
-                MediaStore.Video.Media.getContentUri(volumeName)
-
-            else -> null
-        }
-
-    private fun result(
-        destinations: Map<String, TransferredMediaItem>,
-        failures: Map<String, String>,
-        pendingTransfers: Map<String, PendingTransfer> = emptyMap(),
-        requiresRecovery: Boolean = pendingTransfers.isNotEmpty(),
-    ) = mapOf(
-        "destinations" to destinations.mapValues { it.value.toChannelMap() },
-        "failures" to failures,
-        "requiresRecovery" to requiresRecovery,
-    )
-
-    private fun persistRecoveryResult(
-        transferID: String,
-        recoveryContext: Map<String, Any>?,
-        result: Map<String, Any>,
-        pendingTransfers: Map<String, PendingTransfer>,
-    ) {
-        val preferences = context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
-        val existing = preferences.getString(transferID, null)
-        val json = existing?.let(::JSONObject) ?: JSONObject()
-        recoveryContext?.forEach { (key, value) ->
-            json.put(key, jsonValue(value))
-        }
-        json.apply {
-            put("destinations", jsonValue(result["destinations"] as Map<*, *>))
-            put("failures", JSONObject(result["failures"] as Map<*, *>))
-            put(
-                "pendingTransfers",
-                JSONObject().apply {
-                    pendingTransfers.forEach { (sourceID, pending) ->
-                        put(sourceID, pending.toJson())
-                    }
-                },
-            )
-            remove("pendingMoves")
-            remove("destinationLocalIDs")
-        }
-        check(preferences
-            .edit()
-            .putString(transferID, json.toString())
-            .commit()) { "Could not persist device-folder transfer recovery record" }
-    }
-
-    private fun destination(bucketID: String): DeviceFolderDestination? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
-        return context.contentResolver.query(
+    private fun destination(bucketID: String): Destination? =
+        context.contentResolver.query(
             MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL),
-            arrayOf(
-                MediaStore.MediaColumns.RELATIVE_PATH,
-                MediaStore.MediaColumns.VOLUME_NAME,
-            ),
-            "${MediaStore.Images.Media.BUCKET_ID}=? AND " +
-                "${MediaStore.MediaColumns.IS_PENDING}=0",
+            arrayOf(MediaStore.MediaColumns.RELATIVE_PATH, MediaStore.MediaColumns.VOLUME_NAME),
+            "${MediaStore.Images.Media.BUCKET_ID}=? AND ${MediaStore.MediaColumns.IS_PENDING}=0",
             arrayOf(bucketID),
             null,
         )?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            val relativePath = cursor.getString(0) ?: return@use null
-            val volumeName = cursor.getString(1) ?: return@use null
-            DeviceFolderDestination(bucketID, relativePath, volumeName)
+            if (cursor.moveToFirst()) {
+                cursor.getString(0)?.let { path ->
+                    cursor.getString(1)?.let { volume -> Destination(bucketID, path, volume) }
+                }
+            } else {
+                null
+            }
         }
-    }
 
-    private fun copy(
-        source: MediaItem,
-        target: DeviceFolderDestination,
-        anchor: Uri?,
-        onPrepared: (TransferredMediaItem) -> Unit = {},
-    ): TransferredMediaItem {
+    private fun copy(source: MediaItem, target: Destination, anchor: Uri?): Map<String, String> {
         val resolver = context.contentResolver
-        val mimeType = source.mimeType ?: resolver.getType(source.uri) ?: "application/octet-stream"
-        val collection = destinationCollection(source.mediaType, target.volumeName)
-        val displayName = availableDisplayName(target, source.displayName)
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, target.relativePath)
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
-            source.dateTaken?.let {
-                put(MediaStore.Images.ImageColumns.DATE_TAKEN, it)
-            }
-        }
-        val destination = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            resolver.insert(collection, values, placementExtras(anchor))
-        } else {
-            resolver.insert(collection, values)
-        } ?: error("Could not create destination")
-        val transferred = TransferredMediaItem(destination, displayName)
-        return try {
-            onPrepared(transferred)
-            val inputStream = resolver.openInputStream(source.uri)
-                ?: throw IOException("Could not open source")
-            val outputStream = resolver.openOutputStream(destination)
-                ?: throw IOException("Could not open destination")
-            val copiedBytes = inputStream.use { input ->
-                outputStream.use { output -> input.copyTo(output) }
-            }
-            if (source.size != null && copiedBytes != source.size) {
-                throw IOException("Copied byte count does not match source")
-            }
-            val published = resolver.update(destination, ContentValues().apply {
-                put(MediaStore.MediaColumns.IS_PENDING, 0)
-            }, null, null)
-            if (published != 1) throw IOException("Could not publish destination")
-            transferred
-        } catch (error: Exception) {
-            val removed = runCatching { resolver.delete(destination, null, null) }
-                .getOrDefault(0)
-            if (removed != 1) {
-                Log.e(TAG, "Could not remove incomplete destination=$destination")
-            }
-            throw error
-        }
-    }
-
-    private fun move(
-        source: MediaItem,
-        target: DeviceFolderDestination,
-        plan: MediaTransferPlan,
-        onPrepared: (PendingTransfer) -> Unit,
-    ): TransferredMediaItem {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) error("Unsupported Android version")
-        if (plan.requiresCopy) {
-            lateinit var pending: PendingTransfer
-            val destination = copy(source, target, plan.anchor) { created ->
-                pending = PendingTransfer(
-                    kind = PendingTransferKind.copyDelete,
-                    sourceUri = source.uri,
-                    destinationUri = created.uri,
-                    destination = created,
-                    sourceDisplayName = source.displayName,
-                    sourceRelativePath = source.relativePath,
-                    targetRelativePath = target.relativePath,
-                )
-                onPrepared(pending)
-            }
-            if (context.contentResolver.delete(source.uri, null, null) != 1) {
-                val rolledBack = context.contentResolver.delete(destination.uri, null, null) == 1
-                throw IOException(
-                    "Could not remove source after copying; destination rollback=$rolledBack",
-                )
-            }
-            return destination
-        }
-        val displayName = availableDisplayName(target, source.displayName)
-        val destination = TransferredMediaItem(source.uri, displayName)
-        onPrepared(
-            PendingTransfer(
-                kind = PendingTransferKind.relocate,
-                sourceUri = source.uri,
-                destinationUri = null,
-                destination = destination,
-                sourceDisplayName = source.displayName,
-                sourceRelativePath = source.relativePath,
-                targetRelativePath = target.relativePath,
-            ),
-        )
-        val updated = context.contentResolver.update(
-            source.uri,
+        val name = availableDisplayName(target, source.displayName)
+        val destination = resolver.insert(
+            destinationCollection(source.mediaType, target.volumeName),
             ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, source.mimeType ?: resolver.getType(source.uri))
                 put(MediaStore.MediaColumns.RELATIVE_PATH, target.relativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+                source.dateTaken?.let { put(MediaStore.Images.ImageColumns.DATE_TAKEN, it) }
             },
-            null,
-            null,
-        )
-        if (updated != 1) throw IOException("MediaStore could not move source")
-        try {
-            verifyMove(source, target, displayName)
-        } catch (error: Exception) {
-            val rolledBack = runCatching {
-                context.contentResolver.update(
-                    source.uri,
-                    ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, source.displayName)
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, source.relativePath)
-                    },
-                    null,
-                    null,
-                ) == 1
-            }.getOrDefault(false)
-            throw IOException("MediaStore did not confirm move; rollback=$rolledBack", error)
+            placementExtras(anchor),
+        ) ?: throw IOException("Could not create destination")
+        val copied = resolver.openInputStream(source.uri)?.use { input ->
+            resolver.openOutputStream(destination)?.use { output -> input.copyTo(output) }
+                ?: throw IOException("Could not open destination")
+        } ?: throw IOException("Could not open source")
+        if (source.size != null && copied != source.size) throw IOException("Copied byte count does not match source")
+        if (resolver.update(destination, ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }, null, null) != 1) {
+            throw IOException("Could not publish destination")
         }
-        return destination
+        return mapOf("localID" to ContentUris.parseId(destination).toString(), "displayName" to name)
     }
 
-    private fun transferPlan(
-        operation: String,
-        source: MediaItem,
-        target: DeviceFolderDestination,
-    ): MediaTransferPlan? {
-        val anchor = destinationAnchorUri(target, source.mediaType)
+    private fun relocate(source: MediaItem, target: Destination): Map<String, String> {
+        val name = availableDisplayName(target, source.displayName)
+        if (context.contentResolver.update(source.uri, ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, target.relativePath)
+            }, null, null) != 1) {
+            throw IOException("MediaStore could not move source")
+        }
+        return mapOf("localID" to ContentUris.parseId(source.uri).toString(), "displayName" to name)
+    }
+
+    private fun plan(operation: String, source: MediaItem, target: Destination): Plan? {
         val requiresCopy = operation == "copy" || source.volumeName != target.volumeName
-        if (!requiresCopy && !supportsMediaTypeAtPath(source.mediaType, target.relativePath)) {
-            return null
-        }
-        if (
-            requiresCopy &&
-            anchor == null &&
-            !supportsMediaTypeAtPath(source.mediaType, target.relativePath)
-        ) {
-            return null
-        }
-        return MediaTransferPlan(anchor, requiresCopy)
+        val anchor = destinationAnchorUri(target, source.mediaType)
+        if (!requiresCopy && !supportsMediaTypeAtPath(source.mediaType, target.relativePath)) return null
+        if (requiresCopy && anchor == null && !supportsMediaTypeAtPath(source.mediaType, target.relativePath)) return null
+        return Plan(anchor, requiresCopy)
     }
 
-    private fun isRolledBack(pending: PendingTransfer): Boolean =
-        when (pending.kind) {
-            PendingTransferKind.copy ->
-                pending.destinationUri == null || !mediaExists(pending.destinationUri)
-
-            PendingTransferKind.copyDelete ->
-                mediaExists(pending.sourceUri) &&
-                    (pending.destinationUri == null || !mediaExists(pending.destinationUri))
-
-            PendingTransferKind.relocate ->
-                mediaState(pending.sourceUri) ==
-                    MediaState(pending.sourceRelativePath, pending.sourceDisplayName)
-        }
-
-    private fun mediaExists(uri: Uri): Boolean =
-        context.contentResolver.query(
-            uri,
-            arrayOf(MediaStore.MediaColumns._ID),
-            null,
-            null,
-            null,
-        )?.use { it.moveToFirst() } ?: false
-
-    private fun mediaIsPublished(uri: Uri): Boolean =
-        context.contentResolver.query(
-            uri,
-            arrayOf(MediaStore.MediaColumns.IS_PENDING),
-            null,
-            null,
-            null,
-        )?.use { cursor -> cursor.moveToFirst() && cursor.getInt(0) == 0 } ?: false
-
-    private fun mediaState(uri: Uri): MediaState? =
-        context.contentResolver.query(
-            uri,
-            arrayOf(
-                MediaStore.MediaColumns.RELATIVE_PATH,
-                MediaStore.MediaColumns.DISPLAY_NAME,
-            ),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            val relativePath = cursor.getString(0) ?: return@use null
-            val displayName = cursor.getString(1) ?: return@use null
-            MediaState(relativePath, displayName)
-        }
-
-    private fun jsonValue(value: Any): Any = when (value) {
-        is Map<*, *> -> JSONObject().apply {
-            value.forEach { (key, nestedValue) ->
-                if (key is String && nestedValue != null) put(key, jsonValue(nestedValue))
-            }
-        }
-
-        is Collection<*> -> JSONArray().apply {
-            value.forEach { nestedValue ->
-                if (nestedValue != null) put(jsonValue(nestedValue))
-            }
-        }
-
-        else -> value
-    }
-
-    private fun supportsOperation(operation: String?): Boolean =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            (operation == "copy" || operation == "move")
-
-    private fun availableDisplayName(target: DeviceFolderDestination, sourceName: String): String {
+    private fun availableDisplayName(target: Destination, sourceName: String): String {
         if (!containsDisplayName(target, sourceName)) return sourceName
-
         val extensionStart = sourceName.lastIndexOf('.').takeIf { it > 0 } ?: sourceName.length
         val baseName = sourceName.substring(0, extensionStart)
         val extension = sourceName.substring(extensionStart)
@@ -731,176 +202,66 @@ internal class DeviceFolderTransferService(private val context: Context) {
         return candidate
     }
 
-    private fun containsDisplayName(target: DeviceFolderDestination, displayName: String): Boolean =
+    private fun containsDisplayName(target: Destination, displayName: String): Boolean =
         context.contentResolver.query(
             MediaStore.Files.getContentUri(target.volumeName),
             arrayOf(MediaStore.MediaColumns._ID),
-            "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND " +
-                "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND " +
-                "${MediaStore.MediaColumns.IS_PENDING}=0",
+            "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=? AND ${MediaStore.MediaColumns.IS_PENDING}=0",
             arrayOf(target.relativePath, displayName),
             null,
         )?.use { it.moveToFirst() } ?: false
 
-    private fun verifyMove(
-        source: MediaItem,
-        target: DeviceFolderDestination,
-        displayName: String,
-    ) {
-        val actual = context.contentResolver.query(
-            source.uri,
-            arrayOf(
-                MediaStore.MediaColumns.RELATIVE_PATH,
-                MediaStore.MediaColumns.DISPLAY_NAME,
-            ),
+    private fun destinationAnchorUri(target: Destination, mediaType: Int): Uri? {
+        val id = context.contentResolver.query(
+            MediaStore.Files.getContentUri(target.volumeName),
+            arrayOf(MediaStore.MediaColumns._ID),
+            "${MediaStore.Images.Media.BUCKET_ID}=? AND ${MediaStore.Files.FileColumns.MEDIA_TYPE}=? AND ${MediaStore.MediaColumns.IS_PENDING}=0",
+            arrayOf(target.bucketID, mediaType.toString()),
             null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            cursor.getString(0) to cursor.getString(1)
-        }
-        if (actual?.first != target.relativePath || actual?.second != displayName) {
-            throw IOException("MediaStore did not confirm move")
-        }
+        )?.use { if (it.moveToFirst()) it.getLong(0) else null } ?: return null
+        return mediaCollection(mediaType, target.volumeName)?.let { ContentUris.withAppendedId(it, id) }
+    }
+
+    private fun mediaCollection(mediaType: Int, volumeName: String): Uri? = when (mediaType) {
+        MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE -> MediaStore.Images.Media.getContentUri(volumeName)
+        MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO -> MediaStore.Video.Media.getContentUri(volumeName)
+        else -> null
     }
 
     private fun destinationCollection(mediaType: Int, volumeName: String): Uri =
-        if (mediaType == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO) {
-            MediaStore.Video.Media.getContentUri(volumeName)
-        } else {
-            MediaStore.Images.Media.getContentUri(volumeName)
-        }
+        mediaCollection(mediaType, volumeName) ?: error("Unsupported media type")
 
     private fun placementExtras(anchor: Uri?): Bundle? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && anchor != null) {
-            Bundle().apply { putParcelable(MediaStore.QUERY_ARG_RELATED_URI, anchor) }
-        } else {
-            null
-        }
+        anchor?.let { Bundle().apply { putParcelable(MediaStore.QUERY_ARG_RELATED_URI, it) } }
 
-    private fun destinationAnchorUri(
-        destination: DeviceFolderDestination,
-        mediaType: Int,
-    ): Uri? {
-        val id = context.contentResolver.query(
-            MediaStore.Files.getContentUri(destination.volumeName),
-            arrayOf(MediaStore.MediaColumns._ID),
-            "${MediaStore.Images.Media.BUCKET_ID}=? AND " +
-                "${MediaStore.Files.FileColumns.MEDIA_TYPE}=? AND " +
-                "${MediaStore.MediaColumns.IS_PENDING}=0",
-            arrayOf(destination.bucketID, mediaType.toString()),
-            null,
-        )?.use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else null }
-            ?: return null
-        val collection = mediaCollection(mediaType, destination.volumeName) ?: return null
-        return ContentUris.withAppendedId(collection, id)
-    }
-
-    private fun supportsMediaTypeAtPath(mediaType: Int, relativePath: String): Boolean {
-        val primaryDirectory = relativePath.substringBefore('/').trim()
+    private fun supportsMediaTypeAtPath(mediaType: Int, path: String): Boolean {
+        val directory = path.substringBefore('/').trim()
         return when (mediaType) {
             MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE ->
-                primaryDirectory.equals(Environment.DIRECTORY_DCIM, ignoreCase = true) ||
-                    primaryDirectory.equals(Environment.DIRECTORY_PICTURES, ignoreCase = true)
-
+                directory.equals(Environment.DIRECTORY_DCIM, true) || directory.equals(Environment.DIRECTORY_PICTURES, true)
             MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO ->
-                primaryDirectory.equals(Environment.DIRECTORY_DCIM, ignoreCase = true) ||
-                    primaryDirectory.equals(Environment.DIRECTORY_MOVIES, ignoreCase = true) ||
-                    primaryDirectory.equals(Environment.DIRECTORY_PICTURES, ignoreCase = true)
-
+                directory.equals(Environment.DIRECTORY_DCIM, true) ||
+                    directory.equals(Environment.DIRECTORY_MOVIES, true) ||
+                    directory.equals(Environment.DIRECTORY_PICTURES, true)
             else -> false
         }
     }
 
-    private companion object {
-        const val TAG = "DeviceFolderTransfer"
-        const val RECOVERY_PREFS = "device_folder_transfer_recovery"
-    }
+    private fun supports(operation: String?): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && (operation == "copy" || operation == "move")
 
-    private data class DeviceFolderDestination(
-        val bucketID: String,
-        val relativePath: String,
-        val volumeName: String,
-    )
-
+    private data class Destination(val bucketID: String, val relativePath: String, val volumeName: String)
+    private data class Plan(val anchor: Uri?, val requiresCopy: Boolean)
     private data class MediaItem(
         val uri: Uri,
         val mediaType: Int,
-        val displayName: String,
         val volumeName: String,
+        val displayName: String,
         val size: Long?,
         val dateTaken: Long?,
         val bucketID: String,
         val mimeType: String?,
-        val relativePath: String,
     )
 
-    private data class MediaTransferPlan(
-        val anchor: Uri?,
-        val requiresCopy: Boolean,
-    )
-
-    private data class TransferredMediaItem(
-        val uri: Uri,
-        val displayName: String,
-    ) {
-        val localID: String
-            get() = ContentUris.parseId(uri).toString()
-
-        fun toChannelMap(): Map<String, String> = mapOf(
-            "localID" to localID,
-            "displayName" to displayName,
-        )
-
-        fun toJson(): JSONObject = JSONObject(toChannelMap())
-    }
-
-    private enum class PendingTransferKind { copy, copyDelete, relocate }
-
-    private data class PendingTransfer(
-        val kind: PendingTransferKind,
-        val sourceUri: Uri,
-        val destinationUri: Uri?,
-        val destination: TransferredMediaItem,
-        val sourceDisplayName: String,
-        val sourceRelativePath: String,
-        val targetRelativePath: String,
-    ) {
-        fun toJson(): JSONObject = JSONObject().apply {
-            put("kind", kind.name)
-            put("sourceUri", sourceUri.toString())
-            destinationUri?.let { put("destinationUri", it.toString()) }
-            put("destination", destination.toJson())
-            put("sourceDisplayName", sourceDisplayName)
-            put("sourceRelativePath", sourceRelativePath)
-            put("targetRelativePath", targetRelativePath)
-        }
-
-        companion object {
-            fun fromJson(json: JSONObject): PendingTransfer {
-                val destination = json.getJSONObject("destination")
-                val destinationUri = json.optString("destinationUri")
-                    .takeIf(String::isNotEmpty)
-                    ?.let(Uri::parse)
-                return PendingTransfer(
-                    kind = PendingTransferKind.valueOf(json.getString("kind")),
-                    sourceUri = Uri.parse(json.getString("sourceUri")),
-                    destinationUri = destinationUri,
-                    destination = TransferredMediaItem(
-                        uri = destinationUri ?: Uri.parse(json.getString("sourceUri")),
-                        displayName = destination.getString("displayName"),
-                    ),
-                    sourceDisplayName = json.getString("sourceDisplayName"),
-                    sourceRelativePath = json.getString("sourceRelativePath"),
-                    targetRelativePath = json.getString("targetRelativePath"),
-                )
-            }
-        }
-    }
-
-    private data class MediaState(
-        val relativePath: String,
-        val displayName: String,
-    )
+    private companion object { const val TAG = "DeviceFolderTransfer" }
 }

@@ -19,7 +19,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
     private lateinit var service: DeviceFolderTransferService
     private var activity: Activity? = null
     private var activityBinding: ActivityPluginBinding? = null
-    private var pendingTransfer: (() -> Unit)? = null
+    private var consentedTransfer: (() -> Unit)? = null
     private var pendingResult: MethodChannel.Result? = null
     private var pendingLocalIDs: List<String> = emptyList()
     private var pendingConsentBatches: ArrayDeque<List<android.net.Uri>>? = null
@@ -43,11 +43,11 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         startPendingConsentRequest()
     }
 
-    fun detachActivity(cancelPendingTransfer: Boolean) {
+    fun detachActivity(cancelPendingConsent: Boolean) {
         activityBinding?.removeActivityResultListener(this)
         activityBinding = null
         activity = null
-        if (cancelPendingTransfer) completeWithFailures("cancelled")
+        if (cancelPendingConsent) completeWithFailures("cancelled")
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -81,14 +81,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                 }
             }
             "deviceFolderTransfer.transfer" -> {
-                val transferID = arguments["transferID"] as? String
-                val recoveryContext = (arguments["recoveryContext"] as? Map<*, *>)
-                    ?.mapNotNull { (key, value) ->
-                        (key as? String)?.let { stringKey ->
-                            value?.let { stringKey to it }
-                        }
-                    }
-                    ?.toMap()
                 val operation = arguments["operation"] as? String
                 val source = arguments["sourceFolderID"] as? String
                 val target = arguments["targetFolderID"] as? String
@@ -98,8 +90,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                 } else {
                     requestConsentThenTransfer(
                         operation,
-                        transferID,
-                        recoveryContext,
                         source,
                         target,
                         ids,
@@ -107,97 +97,12 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                     )
                 }
             }
-            "deviceFolderTransfer.pendingRecoveries" -> {
-                transferExecutor.execute {
-                    try {
-                        val recoveries = service.pendingRecoveries()
-                        postToMain { result.success(recoveries) }
-                    } catch (error: Exception) {
-                        postToMain {
-                            result.error(
-                                "device_folder_transfer_failed",
-                                error.message,
-                                null,
-                            )
-                        }
-                    }
-                }
-            }
-            "deviceFolderTransfer.markCloudMoveStarted",
-            "deviceFolderTransfer.markCloudMoveCompleted" -> {
-                val transferID = arguments["transferID"] as? String
-                if (transferID == null) {
-                    result.error("device_folder_transfer_invalid_arguments", null, null)
-                } else {
-                    transferExecutor.execute {
-                        try {
-                            val completed = if (
-                                call.method == "deviceFolderTransfer.markCloudMoveStarted"
-                            ) {
-                                service.markCloudMoveStarted(transferID)
-                            } else {
-                                service.markCloudMoveCompleted(transferID)
-                            }
-                            postToMain {
-                                if (completed) {
-                                    result.success(null)
-                                } else {
-                                    result.error(
-                                        "device_folder_transfer_recovery_persistence_failed",
-                                        "Could not persist device-folder transfer recovery record",
-                                        null,
-                                    )
-                                }
-                            }
-                        } catch (error: Exception) {
-                            postToMain {
-                                result.error(
-                                    "device_folder_transfer_recovery_persistence_failed",
-                                    error.message,
-                                    null,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            "deviceFolderTransfer.acknowledgeRecovery" -> {
-                val transferID = arguments["transferID"] as? String
-                if (transferID == null) {
-                    result.error("device_folder_transfer_invalid_arguments", null, null)
-                } else {
-                    transferExecutor.execute {
-                        try {
-                            val acknowledged = service.acknowledgeRecovery(transferID)
-                            postToMain {
-                                if (acknowledged) {
-                                    result.success(null)
-                                } else {
-                                    result.error(
-                                        "device_folder_transfer_recovery_persistence_failed",
-                                        "Could not acknowledge device-folder transfer recovery record",
-                                        null,
-                                    )
-                                }
-                            }
-                        } catch (error: Exception) {
-                            postToMain {
-                                result.error(
-                                    "device_folder_transfer_recovery_persistence_failed",
-                                    error.message,
-                                    null,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
             else -> result.notImplemented()
         }
     }
 
     fun detach() {
-        detachActivity(cancelPendingTransfer = true)
+        detachActivity(cancelPendingConsent = true)
         isDetached = true
         mainHandler.removeCallbacksAndMessages(null)
         transferExecutor.shutdown()
@@ -205,8 +110,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
 
     private fun requestConsentThenTransfer(
         operation: String,
-        transferID: String?,
-        recoveryContext: Map<String, Any>?,
         source: String,
         target: String,
         ids: List<String>,
@@ -221,8 +124,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         pendingLocalIDs = ids
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || operation == "copy") {
             runTransfer(
-                transferID,
-                recoveryContext,
                 operation,
                 source,
                 target,
@@ -237,10 +138,8 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                 postToMain {
                     if (pendingResult !== result) return@postToMain
                     if (uris.isEmpty()) {
-                        pendingTransfer = null
+                        consentedTransfer = null
                         runTransfer(
-                            transferID,
-                            recoveryContext,
                             operation,
                             source,
                             target,
@@ -249,10 +148,8 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                         )
                         return@postToMain
                     }
-                    pendingTransfer = {
+                    consentedTransfer = {
                         runTransfer(
-                            transferID,
-                            recoveryContext,
                             operation,
                             source,
                             target,
@@ -311,7 +208,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
             if (pendingConsentBatches?.isNotEmpty() == true) {
                 startPendingConsentRequest()
             } else {
-                val transfer = pendingTransfer
+                val transfer = consentedTransfer
                 clearPendingConsent()
                 transfer?.invoke()
             }
@@ -341,7 +238,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
     }
 
     private fun clearPendingConsent() {
-        pendingTransfer = null
+        consentedTransfer = null
         pendingConsentBatches = null
         isConsentRequestInProgress = false
     }
@@ -358,8 +255,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
     }
 
     private fun runTransfer(
-        transferID: String?,
-        recoveryContext: Map<String, Any>?,
         operation: String,
         source: String,
         target: String,
@@ -369,8 +264,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         transferExecutor.execute {
             try {
                 val transferResult = service.transfer(
-                    transferID,
-                    recoveryContext,
                     operation,
                     source,
                     target,

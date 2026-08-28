@@ -1,8 +1,10 @@
 import "dart:io";
 
+import "package:ente_photos_platform/ente_photos_platform.dart";
 import "package:flutter_test/flutter_test.dart";
 import "package:path_provider_platform_interface/path_provider_platform_interface.dart";
 import "package:photos/db/files_db.dart";
+import "package:photos/services/device_folder_transfer_coordinator.dart";
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -54,10 +56,11 @@ void main() {
         );
       }
 
-      await FilesDB.instance.rebindDeviceFolderMove(
+      await DeviceFolderTransferCoordinator.reconcileDeviceFolderTransfer(
+        DeviceFolderTransferOperation.move,
         sourcePathID: "source",
         targetPathID: "destination",
-        destinationLocalIDs: const {"42": "99"},
+        destinations: const {"42": "99"},
       );
 
       expect(
@@ -131,10 +134,11 @@ void main() {
       ["42", 77, 202, "linked.jpg", "1", "1"],
     );
 
-    await FilesDB.instance.rebindDeviceFolderMove(
+    await DeviceFolderTransferCoordinator.reconcileDeviceFolderTransfer(
+      DeviceFolderTransferOperation.move,
       sourcePathID: "source",
       targetPathID: "destination",
-      destinationLocalIDs: const {"42": "42"},
+      destinations: const {"42": "42"},
     );
 
     expect(await db.getAll("SELECT local_id, collection_id FROM files"), [
@@ -142,6 +146,26 @@ void main() {
     ]);
     expect(await db.getAll("SELECT id, path_id FROM device_files"), [
       {"id": "42", "path_id": "destination"},
+    ]);
+  });
+
+  test("copies retain the source mapping and add the destination", () async {
+    final db = await FilesDB.instance.sqliteAsyncDB;
+    await db.execute("INSERT INTO device_files (id, path_id) VALUES (?, ?)", [
+      "42",
+      "source",
+    ]);
+
+    await DeviceFolderTransferCoordinator.reconcileDeviceFolderTransfer(
+      DeviceFolderTransferOperation.copy,
+      sourcePathID: "source",
+      targetPathID: "destination",
+      destinations: const {"42": "99"},
+    );
+
+    expect(await db.getAll("SELECT id, path_id FROM device_files"), [
+      {"id": "42", "path_id": "source"},
+      {"id": "99", "path_id": "destination"},
     ]);
   });
 
@@ -168,15 +192,17 @@ void main() {
         );
       }
 
-      await FilesDB.instance.rebindDeviceFolderMove(
+      await DeviceFolderTransferCoordinator.reconcileDeviceFolderTransfer(
+        DeviceFolderTransferOperation.move,
         sourcePathID: "source",
         targetPathID: "destination",
-        destinationLocalIDs: const {"42": "99"},
+        destinations: const {"42": "99"},
       );
-      await FilesDB.instance.rebindDeviceFolderMove(
+      await DeviceFolderTransferCoordinator.reconcileDeviceFolderTransfer(
+        DeviceFolderTransferOperation.move,
         sourcePathID: "source",
         targetPathID: "destination",
-        destinationLocalIDs: const {"42": "99"},
+        destinations: const {"42": "99"},
       );
 
       expect(await db.getAll("SELECT local_id, title FROM files"), [
