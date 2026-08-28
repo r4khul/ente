@@ -113,6 +113,7 @@ void main() {
       'failures': <String, String>{},
     });
 
+    expect(result.destinationLocalIDs, {'one': 'new-one'});
     expect(result.destinations['one']?.displayName, isNull);
   });
 
@@ -129,17 +130,13 @@ void main() {
   test('decodes a native transfer recovery record', () {
     final recovery = DeviceFolderTransferRecovery.fromChannelMap({
       'transferID': 'transfer-id',
+      'operation': 'copy',
       'sourceFolderID': 'source',
       'targetFolderID': 'target',
-      'sourceLocalIDs': ['one'],
-      'sourceRecordIDs': {'one': 11},
-      'cloudMoveSourceUploadedFileIDs': {
-        'one': [21],
-      },
       'ownerID': 7,
+      'cloudMoveStarted': true,
       'cloudMoveCompleted': false,
       'cloudMoveSourceCollectionID': 9,
-      'cloudMoveSourceLocalIDs': ['one'],
       'destinations': {
         'one': {'localID': 'new-one', 'displayName': 'new-name.jpg'},
       },
@@ -147,14 +144,10 @@ void main() {
     });
 
     expect(recovery.transferID, 'transfer-id');
-    expect(recovery.sourceLocalIDs, {'one'});
-    expect(recovery.sourceRecordIDs, {'one': 11});
-    expect(recovery.cloudMoveSourceUploadedFileIDs, {
-      'one': [21],
-    });
+    expect(recovery.operation, DeviceFolderTransferOperation.copy);
     expect(recovery.ownerID, 7);
+    expect(recovery.cloudMoveStarted, isTrue);
     expect(recovery.cloudMoveSourceCollectionID, 9);
-    expect(recovery.cloudMoveSourceLocalIDs, {'one'});
     expect(recovery.hasCloudMove, isTrue);
     expect(recovery.result.destinationLocalIDs, {'one': 'new-one'});
   });

@@ -765,13 +765,6 @@ class _FileSelectionActionsWidgetState
         .toSet()
         .toList(growable: false);
     if (localIDs.isEmpty) return;
-    final sourceRecordIDs = operation == DeviceFolderTransferOperation.move
-        ? <String, int>{
-            for (final file in selected)
-              if (file.localID != null && file.generatedID != null)
-                file.localID!: file.generatedID!,
-          }
-        : const <String, int>{};
 
     try {
       final destination = await showDeviceFolderActionSheet(
@@ -807,7 +800,7 @@ class _FileSelectionActionsWidgetState
         );
         if (!confirmed || !context.mounted) return;
       }
-      DeviceFolderTransferCloudMove? cloudMove;
+      int? cloudMoveSourceCollectionID;
       if (operation == DeviceFolderTransferOperation.move &&
           source.shouldBackup &&
           destination.shouldBackup &&
@@ -816,10 +809,7 @@ class _FileSelectionActionsWidgetState
         final choice = await showBackedUpDeviceFolderMoveSheet(context);
         if (choice == null || !mounted) return;
         if (choice == BackedUpDeviceFolderMoveChoice.moveInEnte) {
-          cloudMove = DeviceFolderTransferCloudMove(
-            sourceCollectionID: source.collectionID!,
-            sourceLocalIDs: cloudMoveSourceLocalIDs,
-          );
+          cloudMoveSourceCollectionID = source.collectionID!;
         }
       }
       if (!mounted) return;
@@ -844,8 +834,7 @@ class _FileSelectionActionsWidgetState
         result = await DeviceFolderTransferCoordinator.instance.transfer(
           source: source,
           destination: destination,
-          sourceRecordIDs: sourceRecordIDs,
-          cloudMove: cloudMove,
+          cloudMoveSourceCollectionID: cloudMoveSourceCollectionID,
           request: DeviceFolderTransferRequest(
             operation: operation,
             sourceFolderID: source.id,

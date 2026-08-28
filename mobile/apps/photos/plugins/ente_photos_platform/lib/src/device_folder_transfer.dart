@@ -146,80 +146,47 @@ class DeviceFolderTransferDestination {
 class DeviceFolderTransferRecovery {
   const DeviceFolderTransferRecovery({
     required this.transferID,
+    required this.operation,
     required this.result,
     required this.sourceFolderID,
     required this.targetFolderID,
-    required this.sourceLocalIDs,
-    required this.sourceRecordIDs,
-    required this.cloudMoveSourceUploadedFileIDs,
     required this.ownerID,
+    required this.cloudMoveStarted,
     required this.cloudMoveCompleted,
     this.cloudMoveSourceCollectionID,
-    this.cloudMoveSourceLocalIDs = const {},
   });
 
   final String transferID;
+  final DeviceFolderTransferOperation operation;
   final DeviceFolderTransferResult result;
   final String sourceFolderID;
   final String targetFolderID;
-  final Set<String> sourceLocalIDs;
-  final Map<String, int> sourceRecordIDs;
-  final Map<String, List<int>> cloudMoveSourceUploadedFileIDs;
   final int ownerID;
+  final bool cloudMoveStarted;
   final bool cloudMoveCompleted;
   final int? cloudMoveSourceCollectionID;
-  final Set<String> cloudMoveSourceLocalIDs;
 
   bool get hasCloudMove =>
-      cloudMoveSourceCollectionID != null &&
-      cloudMoveSourceCollectionID != -1 &&
-      cloudMoveSourceLocalIDs.isNotEmpty;
+      cloudMoveSourceCollectionID != null && cloudMoveSourceCollectionID != -1;
 
   factory DeviceFolderTransferRecovery.fromChannelMap(
     Map<dynamic, dynamic> map,
   ) {
     return DeviceFolderTransferRecovery(
       transferID: map['transferID'] as String,
+      operation: DeviceFolderTransferOperation.values.firstWhere(
+        (operation) => operation.name == (map['operation'] ?? 'move'),
+        orElse: () => DeviceFolderTransferOperation.move,
+      ),
       result: DeviceFolderTransferResult.fromChannelMap(map),
       sourceFolderID: map['sourceFolderID'] as String,
       targetFolderID: map['targetFolderID'] as String,
-      sourceLocalIDs: (map['sourceLocalIDs'] as List<dynamic>? ?? const [])
-          .whereType<String>()
-          .toSet(),
-      sourceRecordIDs: _intMap(map['sourceRecordIDs']),
-      cloudMoveSourceUploadedFileIDs: _intListMap(
-        map['cloudMoveSourceUploadedFileIDs'],
-      ),
       ownerID: map['ownerID'] as int,
+      cloudMoveStarted: map['cloudMoveStarted'] == true,
       cloudMoveCompleted: map['cloudMoveCompleted'] == true,
       cloudMoveSourceCollectionID: (map['cloudMoveSourceCollectionID'] as num?)
           ?.toInt(),
-      cloudMoveSourceLocalIDs:
-          (map['cloudMoveSourceLocalIDs'] as List<dynamic>? ?? const [])
-              .whereType<String>()
-              .toSet(),
     );
-  }
-
-  static Map<String, int> _intMap(Object? value) {
-    final map = value as Map<dynamic, dynamic>? ?? const {};
-    return {
-      for (final entry in map.entries)
-        if (entry.key is String && entry.value is num)
-          entry.key as String: (entry.value as num).toInt(),
-    };
-  }
-
-  static Map<String, List<int>> _intListMap(Object? value) {
-    final map = value as Map<dynamic, dynamic>? ?? const {};
-    return {
-      for (final entry in map.entries)
-        if (entry.key is String && entry.value is List<dynamic>)
-          entry.key as String: <int>[
-            for (final value in entry.value)
-              if (value is num) value.toInt(),
-          ],
-    };
   }
 }
 
@@ -290,6 +257,13 @@ class DeviceFolderTransferClient {
   Future<void> markCloudMoveCompleted(String transferID) {
     return _methodChannel.invokeMethod<void>(
       'deviceFolderTransfer.markCloudMoveCompleted',
+      {'transferID': transferID},
+    );
+  }
+
+  Future<void> markCloudMoveStarted(String transferID) {
+    return _methodChannel.invokeMethod<void>(
+      'deviceFolderTransfer.markCloudMoveStarted',
       {'transferID': transferID},
     );
   }

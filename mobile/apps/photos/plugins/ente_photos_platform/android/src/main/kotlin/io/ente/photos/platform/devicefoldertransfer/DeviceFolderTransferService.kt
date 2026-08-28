@@ -48,12 +48,12 @@ internal class DeviceFolderTransferService(private val context: Context) {
     ): Map<String, Any> {
         val destinations = mutableMapOf<String, TransferredMediaItem>()
         val failures = mutableMapOf<String, String>()
-        val pendingMoves = mutableMapOf<String, PendingMove>()
+        val pendingTransfers = mutableMapOf<String, PendingTransfer>()
         if (!supportsOperation(operation)) {
             sourceLocalIDs.forEach { failures[it] = "unsupported" }
             return result(destinations, failures)
         }
-        if (operation == "move" && (transferID == null || recoveryContext == null)) {
+        if (transferID == null || recoveryContext == null) {
             sourceLocalIDs.forEach { failures[it] = "failed" }
             return result(destinations, failures)
         }
@@ -62,8 +62,8 @@ internal class DeviceFolderTransferService(private val context: Context) {
                 persistRecoveryResult(
                     it,
                     recoveryContext,
-                    result(destinations, failures),
-                    pendingMoves,
+                    result(destinations, failures, pendingTransfers),
+                    pendingTransfers,
                 )
             }
         }
@@ -72,18 +72,25 @@ internal class DeviceFolderTransferService(private val context: Context) {
             sourceLocalIDs.forEach { failures[it] = "ineligibleDestination" }
             return result(destinations, failures)
         }
-        sourceLocalIDs.forEach { localID ->
+        for ((index, localID) in sourceLocalIDs.withIndex()) {
             if (localID.toLongOrNull() == null) {
                 failures[localID] = "missingSource"
-                return@forEach
+                continue
+            }
+            if (hasUnacknowledgedTransferFor(localID)) {
+                // A copy can leave the source in place, so retrying before the
+                // prior journal has been reconciled would create a second copy.
+                failures[localID] = "failed"
+                continue
             }
             var shouldPersistRecovery = false
-            var preparedMove: PendingMove? = null
+            var preparedTransfer: PendingTransfer? = null
+            var checkpointFailedAfterTransfer = false
 
-            fun restoreUncheckpointedMove() {
-                preparedMove?.let { pending ->
-                    if (destinations.containsKey(localID) && !pendingMoves.containsKey(localID)) {
-                        pendingMoves[localID] = pending
+            fun restoreUncheckpointedTransfer() {
+                preparedTransfer?.let { pending ->
+                    if (destinations.containsKey(localID) && !pendingTransfers.containsKey(localID)) {
+                        pendingTransfers[localID] = pending
                         destinations.remove(localID)
                     }
                 }
@@ -99,27 +106,41 @@ internal class DeviceFolderTransferService(private val context: Context) {
                     val plan = transferPlan(operation, source, target)
                     if (plan == null) {
                         failures[localID] = "ineligibleDestination"
-                    } else if (operation == "copy") {
-                        destinations[localID] = copy(source, target, plan.anchor)
                     } else {
                         try {
-                            val moved = move(
+                            val transferred = if (operation == "copy") {
+                                copy(source, target, plan.anchor) { created ->
+                                    PendingTransfer(
+                                        kind = PendingTransferKind.copy,
+                                        sourceUri = source.uri,
+                                        destinationUri = created.uri,
+                                        destination = created,
+                                        sourceDisplayName = source.displayName,
+                                        sourceRelativePath = source.relativePath,
+                                        targetRelativePath = target.relativePath,
+                                    ).also { pending ->
+                                        preparedTransfer = pending
+                                        pendingTransfers[localID] = pending
+                                        persistProgress()
+                                    }
+                                }
+                            } else move(
                                 source,
                                 target,
                                 plan,
                                 onPrepared = { pending ->
-                                    preparedMove = pending
-                                    pendingMoves[localID] = pending
+                                    preparedTransfer = pending
+                                    pendingTransfers[localID] = pending
                                     persistProgress()
                                 },
                             )
-                            destinations[localID] = moved
-                            pendingMoves.remove(localID)
+                            destinations[localID] = transferred
+                            pendingTransfers.remove(localID)
                             shouldPersistRecovery = true
                         } catch (error: Exception) {
-                            preparedMove?.let { pending ->
+                            preparedTransfer?.let { pending ->
                                 if (isRolledBack(pending)) {
-                                    pendingMoves.remove(localID)
+                                    pendingTransfers.remove(localID)
                                     destinations.remove(localID)
                                     shouldPersistRecovery = true
                                 }
@@ -128,12 +149,28 @@ internal class DeviceFolderTransferService(private val context: Context) {
                         }
                     }
                 }
-                if (shouldPersistRecovery) persistProgress()
+                if (shouldPersistRecovery) {
+                    try {
+                        persistProgress()
+                    } catch (error: Exception) {
+                        // The preparation checkpoint is still the durable
+                        // truth. Keep reporting the completed native mapping,
+                        // retain that checkpoint for recovery, and do not
+                        // begin another irreversible operation in this batch.
+                        preparedTransfer?.let { pendingTransfers[localID] = it }
+                        checkpointFailedAfterTransfer = true
+                        Log.e(
+                            TAG,
+                            "Could not checkpoint completed $operation media=$localID",
+                            error,
+                        )
+                    }
+                }
             } catch (security: SecurityException) {
-                restoreUncheckpointedMove()
+                restoreUncheckpointedTransfer()
                 failures[localID] = "permissionDenied"
             } catch (error: Exception) {
-                restoreUncheckpointedMove()
+                restoreUncheckpointedTransfer()
                 Log.e(
                     TAG,
                     "Failed to $operation media=$localID from=$sourceFolderID to=$targetFolderID " +
@@ -142,8 +179,14 @@ internal class DeviceFolderTransferService(private val context: Context) {
                 )
                 failures[localID] = "failed"
             }
+            if (checkpointFailedAfterTransfer) {
+                sourceLocalIDs.drop(index + 1).forEach { remainingID ->
+                    failures.putIfAbsent(remainingID, "failed")
+                }
+                break
+            }
         }
-        val result = result(destinations, failures, pendingMoves)
+        val result = result(destinations, failures, pendingTransfers)
         return result
     }
 
@@ -155,7 +198,13 @@ internal class DeviceFolderTransferService(private val context: Context) {
                     ?.let { recoveryRecord(transferID, it) }
             }
 
-    fun markCloudMoveCompleted(transferID: String): Boolean {
+    fun markCloudMoveStarted(transferID: String): Boolean =
+        markCloudMoveState(transferID, "cloudMoveStarted")
+
+    fun markCloudMoveCompleted(transferID: String): Boolean =
+        markCloudMoveState(transferID, "cloudMoveCompleted")
+
+    private fun markCloudMoveState(transferID: String, key: String): Boolean {
         val preferences = context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
         val raw = preferences.getString(transferID, null) ?: return false
         val json = try {
@@ -164,7 +213,7 @@ internal class DeviceFolderTransferService(private val context: Context) {
             Log.e(TAG, "Could not update device-folder transfer recovery result", error)
             return false
         }
-        json.put("cloudMoveCompleted", true)
+        json.put(key, true)
         return preferences.edit().putString(transferID, json.toString()).commit()
     }
 
@@ -175,24 +224,43 @@ internal class DeviceFolderTransferService(private val context: Context) {
             Log.e(TAG, "Could not repair device-folder transfer recovery record", error)
             return null
         }
-        val pendingMoves = json.optJSONObject("pendingMoves") ?: return raw
-        if (pendingMoves.length() == 0) return raw
+        val pendingTransfers = json.optJSONObject("pendingTransfers")
+            ?: json.optJSONObject("pendingMoves")
+            ?: return raw
+        if (pendingTransfers.length() == 0) return raw
         val destinations = json.optJSONObject("destinations") ?: JSONObject().also {
             json.put("destinations", it)
         }
         val failures = json.optJSONObject("failures") ?: JSONObject().also {
             json.put("failures", it)
         }
-        val sourceIDs = buildList { pendingMoves.keys().forEach(::add) }
+        val sourceIDs = buildList { pendingTransfers.keys().forEach(::add) }
         for (sourceID in sourceIDs) {
             val pending = try {
-                PendingMove.fromJson(pendingMoves.getJSONObject(sourceID))
+                PendingTransfer.fromJson(pendingTransfers.getJSONObject(sourceID))
             } catch (error: Exception) {
-                Log.e(TAG, "Could not parse pending device-folder move", error)
+                Log.e(TAG, "Could not parse pending device-folder transfer", error)
                 return null
             }
             when (pending.kind) {
-                PendingMoveKind.copyDelete -> {
+                PendingTransferKind.copy -> {
+                    val destinationUri = pending.destinationUri ?: return null
+                    if (mediaIsPublished(destinationUri)) {
+                        destinations.put(sourceID, pending.destination.toJson())
+                        failures.remove(sourceID)
+                    } else {
+                        val removed = !mediaExists(destinationUri) ||
+                            runCatching {
+                                context.contentResolver.delete(destinationUri, null, null) == 1 ||
+                                    !mediaExists(destinationUri)
+                            }.getOrDefault(false)
+                        if (!removed) return null
+                        destinations.remove(sourceID)
+                        failures.put(sourceID, "failed")
+                    }
+                }
+
+                PendingTransferKind.copyDelete -> {
                     val sourceExists = mediaExists(pending.sourceUri)
                     val destinationUri = pending.destinationUri ?: return null
                     val destinationExists = mediaExists(destinationUri)
@@ -214,7 +282,7 @@ internal class DeviceFolderTransferService(private val context: Context) {
                     }
                 }
 
-                PendingMoveKind.relocate -> {
+                PendingTransferKind.relocate -> {
                     val state = mediaState(pending.sourceUri) ?: return null
                     when (state) {
                         MediaState(pending.targetRelativePath, pending.destination.displayName) -> {
@@ -231,8 +299,9 @@ internal class DeviceFolderTransferService(private val context: Context) {
                     }
                 }
             }
-            pendingMoves.remove(sourceID)
+            pendingTransfers.remove(sourceID)
         }
+        json.remove("pendingMoves")
         val updated = json.toString()
         val persisted = context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -252,7 +321,7 @@ internal class DeviceFolderTransferService(private val context: Context) {
                 val destination = destinations.getJSONObject(key)
                 destinationMap[key] = mapOf(
                     "localID" to destination.getString("localID"),
-                    "displayName" to destination.getString("displayName"),
+                    "displayName" to destination.optString("displayName").takeIf(String::isNotEmpty),
                 )
             }
             if (destinations == null) {
@@ -269,41 +338,20 @@ internal class DeviceFolderTransferService(private val context: Context) {
             failures.keys().forEach { key -> failureMap[key] = failures.getString(key) }
             val recovery = mutableMapOf<String, Any>(
                 "transferID" to transferID,
+                "operation" to json.optString("operation", "move"),
                 "sourceFolderID" to json.getString("sourceFolderID"),
                 "targetFolderID" to json.getString("targetFolderID"),
                 "ownerID" to json.getLong("ownerID"),
-                "sourceLocalIDs" to json.getJSONArray("sourceLocalIDs").let { array ->
-                    List(array.length()) { index -> array.getString(index) }
-                },
-                "sourceRecordIDs" to json.optJSONObject("sourceRecordIDs").let { records ->
-                    buildMap {
-                        records?.keys()?.forEach { key -> put(key, records.getLong(key)) }
-                    }
-                },
+                "cloudMoveStarted" to json.optBoolean("cloudMoveStarted", false),
                 "cloudMoveCompleted" to json.optBoolean("cloudMoveCompleted", false),
                 "destinations" to destinationMap,
                 "failures" to failureMap,
+                "requiresRecovery" to
+                    ((json.optJSONObject("pendingTransfers")?.length() ?: 0) > 0),
             )
             if (json.has("cloudMoveSourceCollectionID")) {
                 recovery["cloudMoveSourceCollectionID"] =
                     json.getLong("cloudMoveSourceCollectionID")
-            }
-            if (json.has("cloudMoveSourceLocalIDs")) {
-                recovery["cloudMoveSourceLocalIDs"] =
-                    json.getJSONArray("cloudMoveSourceLocalIDs").let { array ->
-                        List(array.length()) { index -> array.getString(index) }
-                    }
-            }
-            if (json.has("cloudMoveSourceUploadedFileIDs")) {
-                recovery["cloudMoveSourceUploadedFileIDs"] =
-                    json.getJSONObject("cloudMoveSourceUploadedFileIDs").let { records ->
-                        buildMap {
-                            records.keys().forEach { key ->
-                                val ids = records.getJSONArray(key)
-                                put(key, List(ids.length()) { index -> ids.getLong(index) })
-                            }
-                        }
-                    }
             }
             recovery
         } catch (error: Exception) {
@@ -317,6 +365,24 @@ internal class DeviceFolderTransferService(private val context: Context) {
             .edit()
             .remove(transferID)
             .commit()
+
+    private fun hasUnacknowledgedTransferFor(localID: String): Boolean =
+        context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
+            .all
+            .values
+            .any { raw ->
+                val json = try {
+                    JSONObject(raw as? String ?: return@any true)
+                } catch (error: Exception) {
+                    // A corrupt journal must be examined during recovery, not
+                    // bypassed by a retry that could duplicate media.
+                    return@any true
+                }
+                json.optJSONObject("destinations")?.has(localID) == true ||
+                    json.optJSONObject("destinationLocalIDs")?.has(localID) == true ||
+                    json.optJSONObject("pendingTransfers")?.has(localID) == true ||
+                    json.optJSONObject("pendingMoves")?.has(localID) == true
+            }
 
     fun mediaUri(localID: String): Uri? {
         return mediaItem(localID)?.uri
@@ -378,18 +444,19 @@ internal class DeviceFolderTransferService(private val context: Context) {
     private fun result(
         destinations: Map<String, TransferredMediaItem>,
         failures: Map<String, String>,
-        pendingMoves: Map<String, PendingMove> = emptyMap(),
+        pendingTransfers: Map<String, PendingTransfer> = emptyMap(),
+        requiresRecovery: Boolean = pendingTransfers.isNotEmpty(),
     ) = mapOf(
         "destinations" to destinations.mapValues { it.value.toChannelMap() },
         "failures" to failures,
-        "requiresRecovery" to pendingMoves.isNotEmpty(),
+        "requiresRecovery" to requiresRecovery,
     )
 
     private fun persistRecoveryResult(
         transferID: String,
         recoveryContext: Map<String, Any>?,
         result: Map<String, Any>,
-        pendingMoves: Map<String, PendingMove>,
+        pendingTransfers: Map<String, PendingTransfer>,
     ) {
         val preferences = context.getSharedPreferences(RECOVERY_PREFS, Context.MODE_PRIVATE)
         val existing = preferences.getString(transferID, null)
@@ -401,13 +468,14 @@ internal class DeviceFolderTransferService(private val context: Context) {
             put("destinations", jsonValue(result["destinations"] as Map<*, *>))
             put("failures", JSONObject(result["failures"] as Map<*, *>))
             put(
-                "pendingMoves",
+                "pendingTransfers",
                 JSONObject().apply {
-                    pendingMoves.forEach { (sourceID, pending) ->
+                    pendingTransfers.forEach { (sourceID, pending) ->
                         put(sourceID, pending.toJson())
                     }
                 },
             )
+            remove("pendingMoves")
             remove("destinationLocalIDs")
         }
         check(preferences
@@ -440,7 +508,7 @@ internal class DeviceFolderTransferService(private val context: Context) {
         source: MediaItem,
         target: DeviceFolderDestination,
         anchor: Uri?,
-        onCreated: (TransferredMediaItem) -> Unit = {},
+        onPrepared: (TransferredMediaItem) -> Unit = {},
     ): TransferredMediaItem {
         val resolver = context.contentResolver
         val mimeType = source.mimeType ?: resolver.getType(source.uri) ?: "application/octet-stream"
@@ -462,7 +530,7 @@ internal class DeviceFolderTransferService(private val context: Context) {
         } ?: error("Could not create destination")
         val transferred = TransferredMediaItem(destination, displayName)
         return try {
-            onCreated(transferred)
+            onPrepared(transferred)
             val inputStream = resolver.openInputStream(source.uri)
                 ?: throw IOException("Could not open source")
             val outputStream = resolver.openOutputStream(destination)
@@ -492,14 +560,14 @@ internal class DeviceFolderTransferService(private val context: Context) {
         source: MediaItem,
         target: DeviceFolderDestination,
         plan: MediaTransferPlan,
-        onPrepared: (PendingMove) -> Unit,
+        onPrepared: (PendingTransfer) -> Unit,
     ): TransferredMediaItem {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) error("Unsupported Android version")
         if (plan.requiresCopy) {
-            lateinit var pending: PendingMove
+            lateinit var pending: PendingTransfer
             val destination = copy(source, target, plan.anchor) { created ->
-                pending = PendingMove(
-                    kind = PendingMoveKind.copyDelete,
+                pending = PendingTransfer(
+                    kind = PendingTransferKind.copyDelete,
                     sourceUri = source.uri,
                     destinationUri = created.uri,
                     destination = created,
@@ -520,8 +588,8 @@ internal class DeviceFolderTransferService(private val context: Context) {
         val displayName = availableDisplayName(target, source.displayName)
         val destination = TransferredMediaItem(source.uri, displayName)
         onPrepared(
-            PendingMove(
-                kind = PendingMoveKind.relocate,
+            PendingTransfer(
+                kind = PendingTransferKind.relocate,
                 sourceUri = source.uri,
                 destinationUri = null,
                 destination = destination,
@@ -579,13 +647,16 @@ internal class DeviceFolderTransferService(private val context: Context) {
         return MediaTransferPlan(anchor, requiresCopy)
     }
 
-    private fun isRolledBack(pending: PendingMove): Boolean =
+    private fun isRolledBack(pending: PendingTransfer): Boolean =
         when (pending.kind) {
-            PendingMoveKind.copyDelete ->
+            PendingTransferKind.copy ->
+                pending.destinationUri == null || !mediaExists(pending.destinationUri)
+
+            PendingTransferKind.copyDelete ->
                 mediaExists(pending.sourceUri) &&
                     (pending.destinationUri == null || !mediaExists(pending.destinationUri))
 
-            PendingMoveKind.relocate ->
+            PendingTransferKind.relocate ->
                 mediaState(pending.sourceUri) ==
                     MediaState(pending.sourceRelativePath, pending.sourceDisplayName)
         }
@@ -598,6 +669,15 @@ internal class DeviceFolderTransferService(private val context: Context) {
             null,
             null,
         )?.use { it.moveToFirst() } ?: false
+
+    private fun mediaIsPublished(uri: Uri): Boolean =
+        context.contentResolver.query(
+            uri,
+            arrayOf(MediaStore.MediaColumns.IS_PENDING),
+            null,
+            null,
+            null,
+        )?.use { cursor -> cursor.moveToFirst() && cursor.getInt(0) == 0 } ?: false
 
     private fun mediaState(uri: Uri): MediaState? =
         context.contentResolver.query(
@@ -776,10 +856,10 @@ internal class DeviceFolderTransferService(private val context: Context) {
         fun toJson(): JSONObject = JSONObject(toChannelMap())
     }
 
-    private enum class PendingMoveKind { copyDelete, relocate }
+    private enum class PendingTransferKind { copy, copyDelete, relocate }
 
-    private data class PendingMove(
-        val kind: PendingMoveKind,
+    private data class PendingTransfer(
+        val kind: PendingTransferKind,
         val sourceUri: Uri,
         val destinationUri: Uri?,
         val destination: TransferredMediaItem,
@@ -798,13 +878,13 @@ internal class DeviceFolderTransferService(private val context: Context) {
         }
 
         companion object {
-            fun fromJson(json: JSONObject): PendingMove {
+            fun fromJson(json: JSONObject): PendingTransfer {
                 val destination = json.getJSONObject("destination")
                 val destinationUri = json.optString("destinationUri")
                     .takeIf(String::isNotEmpty)
                     ?.let(Uri::parse)
-                return PendingMove(
-                    kind = PendingMoveKind.valueOf(json.getString("kind")),
+                return PendingTransfer(
+                    kind = PendingTransferKind.valueOf(json.getString("kind")),
                     sourceUri = Uri.parse(json.getString("sourceUri")),
                     destinationUri = destinationUri,
                     destination = TransferredMediaItem(

@@ -123,6 +123,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                     }
                 }
             }
+            "deviceFolderTransfer.markCloudMoveStarted",
             "deviceFolderTransfer.markCloudMoveCompleted" -> {
                 val transferID = arguments["transferID"] as? String
                 if (transferID == null) {
@@ -130,7 +131,13 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                 } else {
                     transferExecutor.execute {
                         try {
-                            val completed = service.markCloudMoveCompleted(transferID)
+                            val completed = if (
+                                call.method == "deviceFolderTransfer.markCloudMoveStarted"
+                            ) {
+                                service.markCloudMoveStarted(transferID)
+                            } else {
+                                service.markCloudMoveCompleted(transferID)
+                            }
                             postToMain {
                                 if (completed) {
                                     result.success(null)

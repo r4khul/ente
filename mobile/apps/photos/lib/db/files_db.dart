@@ -61,6 +61,10 @@ class FilesDB with SqlDbBase {
   static const columnThumbnailDecryptionHeader = 'thumbnail_decryption_header';
   static const columnMetadataDecryptionHeader = 'metadata_decryption_header';
   static const columnFileSize = 'file_size';
+  // This is queue provenance, not Ente metadata. A null value means the row
+  // was not queued by automatic folder backup (for example, it can be a
+  // pending manual album upload).
+  static const columnAutoBackupPathID = 'auto_backup_path_id';
 
   // MMD is magic metadata.
   static const columnMMdEncodedJson = 'mmd_encoded_json';
@@ -89,6 +93,7 @@ class FilesDB with SqlDbBase {
     ...updateIndexes(),
     ...createEntityDataTable(),
     ...addAddedTime(),
+    ...addAutoBackupPathID(),
   ];
 
   static const List<String> _columnNames = [
@@ -410,6 +415,18 @@ class FilesDB with SqlDbBase {
     ];
   }
 
+  static List<String> addAutoBackupPathID() {
+    return [
+      '''
+        ALTER TABLE $filesTable ADD COLUMN $columnAutoBackupPathID TEXT;
+      ''',
+      '''
+        CREATE INDEX IF NOT EXISTS auto_backup_path_id_index
+        ON $filesTable($columnAutoBackupPathID);
+      ''',
+    ];
+  }
+
   Future<void> clearTable() async {
     final db = await instance.sqliteAsyncDB;
     await db.execute('DELETE FROM $filesTable');
@@ -433,6 +450,7 @@ class FilesDB with SqlDbBase {
     List<EnteFile> files, {
     SqliteAsyncConflictAlgorithm conflictAlgorithm =
         SqliteAsyncConflictAlgorithm.replace,
+    String? autoBackupPathID,
   }) async {
     if (files.isEmpty) return;
 
@@ -440,15 +458,21 @@ class FilesDB with SqlDbBase {
     final db = await sqliteAsyncDB;
 
     final withIdParams = <List<Object?>>[];
-    const withIdColumnNames = _columnNames;
+    final withIdColumnNames = [
+      ..._columnNames,
+      if (autoBackupPathID != null) columnAutoBackupPathID,
+    ];
     final withoutIdParams = <List<Object?>>[];
-    final withoutIdColumns = _columnNames
+    final withoutIdColumns = withIdColumnNames
         .where((column) => column != columnGeneratedID)
         .toList();
 
     for (final file in files) {
       if (file.generatedID == null) {
-        withoutIdParams.add(_getParameterSetForFile(file));
+        withoutIdParams.add([
+          ..._getParameterSetForFile(file),
+          ?autoBackupPathID,
+        ]);
 
         if (withoutIdParams.length == 400) {
           await _insertBatch(
@@ -460,7 +484,10 @@ class FilesDB with SqlDbBase {
           withoutIdParams.clear();
         }
       } else {
-        withIdParams.add(_getParameterSetForFile(file));
+        withIdParams.add([
+          ..._getParameterSetForFile(file),
+          ?autoBackupPathID,
+        ]);
         if (withIdParams.length == 400) {
           await _insertBatch(
             conflictAlgorithm,
@@ -1138,15 +1165,20 @@ class FilesDB with SqlDbBase {
   Future<void> setCollectionIDForUnMappedLocalFiles(
     int collectionID,
     Set<String> localIDs,
+    String autoBackupPathID,
   ) async {
     final db = await instance.sqliteAsyncDB;
     final inParam = localIDs.map((id) => "'$id'").join(',');
-    await db.execute('''
+    await db.execute(
+      '''
       UPDATE $filesTable
-      SET $columnCollectionID = $collectionID
+      SET $columnCollectionID = $collectionID,
+          $columnAutoBackupPathID = ?
       WHERE $columnLocalID IN ($inParam) AND ($columnCollectionID IS NULL OR 
       $columnCollectionID = -1);
-    ''');
+    ''',
+      [autoBackupPathID],
+    );
   }
 
   Future<void> markFilesForReUpload(
@@ -1327,44 +1359,63 @@ class FilesDB with SqlDbBase {
     );
   }
 
-  Future<void> reconcileDeviceFolderMove({
+  Future<void> rebindDeviceFolderMove({
     required String sourcePathID,
     required String targetPathID,
-    required String targetFolderName,
-    required Map<String, ({String localID, String? displayName})> destinations,
-    required Map<String, int> sourceRecordIDs,
-    required Map<String, List<int>> cloudMovedSourceUploadedFileIDs,
+    required Map<String, String> destinationLocalIDs,
   }) async {
-    if (destinations.isEmpty) return;
+    if (destinationLocalIDs.isEmpty) return;
     final db = await sqliteAsyncDB;
     await db.writeTransaction((tx) async {
       final mappingDeletes = <List<Object?>>[];
       final mappingInserts = <List<Object?>>[];
-      final fileUpdates = <List<Object?>>[];
-      final cloudFileUpdates = <List<Object?>>[];
-      for (final entry in destinations.entries) {
+      final autoBackupQueueReleases = <List<Object?>>[];
+      final localIDRebindings = <List<Object?>>[];
+      final duplicateDeletes = <List<Object?>>[];
+      for (final entry in destinationLocalIDs.entries) {
         mappingDeletes.add([entry.key, sourcePathID]);
-        mappingInserts.add([entry.value.localID, targetPathID]);
-        final sourceRecordID = sourceRecordIDs[entry.key];
-        if (sourceRecordID != null) {
-          fileUpdates.add([
-            entry.value.localID,
-            entry.value.displayName,
-            entry.value.displayName,
-            targetFolderName,
-            sourceRecordID,
-            entry.key,
-            sourceRecordID,
-            entry.key,
-            sourceRecordID,
-            entry.key,
-            entry.key,
-          ]);
+        mappingInserts.add([entry.value, targetPathID]);
+        autoBackupQueueReleases.add([entry.key, sourcePathID]);
+        if (entry.key != entry.value) {
+          localIDRebindings.add([entry.value, entry.key]);
+          duplicateDeletes.add([entry.key, entry.value]);
         }
-        for (final uploadedFileID
-            in cloudMovedSourceUploadedFileIDs[entry.key] ?? const <int>[]) {
-          cloudFileUpdates.add([entry.value.localID, uploadedFileID]);
-        }
+      }
+      for (
+        var start = 0;
+        start < autoBackupQueueReleases.length;
+        start += 400
+      ) {
+        final end = (start + 400).clamp(0, autoBackupQueueReleases.length);
+        await tx.executeBatch(
+          'UPDATE $filesTable SET $columnCollectionID = NULL, '
+          '$columnAutoBackupPathID = NULL '
+          'WHERE $columnLocalID = ? '
+          'AND ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1) '
+          'AND $columnAutoBackupPathID = ?;',
+          autoBackupQueueReleases.sublist(start, end),
+        );
+      }
+      for (var start = 0; start < localIDRebindings.length; start += 400) {
+        final end = (start + 400).clamp(0, localIDRebindings.length);
+        await tx.executeBatch(
+          'UPDATE OR IGNORE $filesTable SET $columnLocalID = ? '
+          'WHERE $columnLocalID = ?;',
+          localIDRebindings.sublist(start, end),
+        );
+      }
+      for (var start = 0; start < duplicateDeletes.length; start += 400) {
+        final end = (start + 400).clamp(0, duplicateDeletes.length);
+        await tx.executeBatch(
+          'DELETE FROM $filesTable WHERE $columnLocalID = ? AND EXISTS ('
+          'SELECT 1 FROM $filesTable AS destination '
+          'WHERE destination.$columnLocalID = ? '
+          'AND COALESCE(destination.$columnUploadedFileID, -1) = '
+          'COALESCE($filesTable.$columnUploadedFileID, -1) '
+          'AND COALESCE(destination.$columnCollectionID, -1) = '
+          'COALESCE($filesTable.$columnCollectionID, -1));',
+          duplicateDeletes.sublist(start, end),
+        );
       }
       for (var start = 0; start < mappingDeletes.length; start += 400) {
         final end = (start + 400).clamp(0, mappingDeletes.length);
@@ -1375,41 +1426,6 @@ class FilesDB with SqlDbBase {
         await tx.executeBatch(
           'INSERT OR IGNORE INTO $deviceFilesTable (id, path_id) VALUES (?, ?);',
           mappingInserts.sublist(start, end),
-        );
-      }
-      for (var start = 0; start < fileUpdates.length; start += 400) {
-        final end = (start + 400).clamp(0, fileUpdates.length);
-        await tx.executeBatch(
-          'UPDATE $filesTable SET '
-          '$columnLocalID = ?, '
-          '$columnTitle = CASE '
-          'WHEN ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1) '
-          'AND ? IS NOT NULL THEN ? ELSE $columnTitle END, '
-          '$columnCollectionID = CASE '
-          'WHEN $columnUploadedFileID IS NULL OR $columnUploadedFileID = -1 '
-          'THEN NULL ELSE $columnCollectionID END, '
-          '$columnDeviceFolder = CASE '
-          'WHEN $columnUploadedFileID IS NULL OR $columnUploadedFileID = -1 '
-          'THEN ? ELSE $columnDeviceFolder END '
-          'WHERE ($columnGeneratedID = ? AND $columnLocalID = ? '
-          'AND ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1)) '
-          'OR $columnUploadedFileID = (SELECT $columnUploadedFileID '
-          'FROM $filesTable WHERE $columnGeneratedID = ? '
-          'AND $columnLocalID = ? AND $columnUploadedFileID IS NOT NULL '
-          'AND $columnUploadedFileID != -1) '
-          'OR (COALESCE((SELECT $columnUploadedFileID FROM $filesTable '
-          'WHERE $columnGeneratedID = ? AND $columnLocalID = ?), -1) = -1 '
-          'AND $columnUploadedFileID IS NOT NULL '
-          'AND $columnUploadedFileID != -1 AND $columnLocalID = ?);',
-          fileUpdates.sublist(start, end),
-        );
-      }
-      for (var start = 0; start < cloudFileUpdates.length; start += 400) {
-        final end = (start + 400).clamp(0, cloudFileUpdates.length);
-        await tx.executeBatch(
-          'UPDATE $filesTable SET $columnLocalID = ? '
-          'WHERE $columnUploadedFileID = ?;',
-          cloudFileUpdates.sublist(start, end),
         );
       }
     });

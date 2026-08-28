@@ -430,6 +430,7 @@ class RemoteSyncService {
       await _db.setCollectionIDForUnMappedLocalFiles(
         collectionID,
         localIDsToSync,
+        deviceCollection.id,
       );
 
       // Re-enabling a backup folder must not duplicate its existing rows.
@@ -467,7 +468,10 @@ class RemoteSyncService {
             fileFoundForLocalIDs.add(localID);
           }
         }
-        await _db.insertMultiple(newFilesToInsert);
+        await _db.insertMultiple(
+          newFilesToInsert,
+          autoBackupPathID: deviceCollection.id,
+        );
         if (fileFoundForLocalIDs.length != localIDsToSync.length) {
           _logger.warning(
             "mismatch in num of filesToSync ${localIDsToSync.length} to "
