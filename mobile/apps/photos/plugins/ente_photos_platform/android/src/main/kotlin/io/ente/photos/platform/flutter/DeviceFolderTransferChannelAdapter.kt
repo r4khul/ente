@@ -24,7 +24,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
     private var pendingLocalIDs: List<String> = emptyList()
     private var pendingConsentBatches: ArrayDeque<List<android.net.Uri>>? = null
     private var isConsentRequestInProgress = false
-    private val transferExecutor = Executors.newSingleThreadExecutor()
+    private var transferExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var isTransferInProgress = false
     @Volatile
@@ -32,6 +32,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
 
     fun attach(binding: FlutterPlugin.FlutterPluginBinding) {
         isDetached = false
+        if (transferExecutor.isShutdown) transferExecutor = Executors.newSingleThreadExecutor()
         service = DeviceFolderTransferService(binding.applicationContext)
     }
 
@@ -47,7 +48,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         activityBinding?.removeActivityResultListener(this)
         activityBinding = null
         activity = null
-        if (cancelPendingConsent && isConsentRequestInProgress) {
+        if (cancelPendingConsent && pendingConsentBatches != null) {
             completeWithFailures("cancelled")
         }
     }
@@ -134,13 +135,14 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
             )
             return
         }
+        pendingConsentBatches = ArrayDeque()
         transferExecutor.execute {
             try {
                 val uris = ids.mapNotNull(service::mediaUri)
                 postToMain {
                     if (pendingResult !== result) return@postToMain
                     if (uris.isEmpty()) {
-                        consentedTransfer = null
+                        clearPendingConsent()
                         runTransfer(
                             operation,
                             source,
@@ -159,9 +161,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                             result,
                         )
                     }
-                    pendingConsentBatches = ArrayDeque(
-                        uris.chunked(MAX_CONSENT_URI_COUNT),
-                    )
+                    pendingConsentBatches?.addAll(uris.chunked(MAX_CONSENT_URI_COUNT))
                     startPendingConsentRequest()
                 }
             } catch (error: Exception) {
@@ -200,7 +200,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
-        if (requestCode != REQUEST_WRITE_ACCESS) return false
+        if (requestCode != REQUEST_WRITE_ACCESS || !isConsentRequestInProgress) return false
         val result = pendingResult ?: return false
         isConsentRequestInProgress = false
         if (resultCode == Activity.RESULT_OK) {

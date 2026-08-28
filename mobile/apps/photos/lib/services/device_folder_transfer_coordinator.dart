@@ -109,9 +109,10 @@ class DeviceFolderTransferCoordinator {
       });
     } finally {
       final result = deviceResult;
-      if (result != null && result.destinations.isNotEmpty) {
-        // A cloud-move error still propagates, but the completed MediaStore
-        // transfer must be reflected locally before the caller handles it.
+      if (result != null && !result.wasCancelled) {
+        // A MediaStore failure can follow a completed mutation (for example,
+        // a cross-volume copy whose source cannot be removed). Reconcile every
+        // non-cancelled result through the normal external-move path.
         try {
           await LocalSyncService.instance.syncAll();
         } catch (error, stackTrace) {

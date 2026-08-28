@@ -24,9 +24,10 @@ internal class DeviceFolderTransferService(private val context: Context) {
         if (!supports(operation)) return emptyList()
         val sources = sourceLocalIDs.map(::mediaItem)
         if (sources.isEmpty() || sources.any { it?.bucketID != sourceFolderID }) return emptyList()
+        val sourceKinds = sources.filterNotNull().distinctBy { it.mediaType to it.volumeName }
         return candidateIDs.filter { candidateID ->
             val target = destination(candidateID) ?: return@filter false
-            sources.filterNotNull().all { plan(operation!!, it, target) != null }
+            sourceKinds.all { plan(operation!!, it, target) != null }
         }
     }
 
@@ -47,6 +48,7 @@ internal class DeviceFolderTransferService(private val context: Context) {
             sourceLocalIDs.forEach { failures[it] = "ineligibleDestination" }
             return result(destinations, failures)
         }
+        val targetNames = displayNames(target).toMutableSet()
         sourceLocalIDs.forEach { localID ->
             try {
                 val source = mediaItem(localID)
@@ -60,15 +62,15 @@ internal class DeviceFolderTransferService(private val context: Context) {
                     return@forEach
                 }
                 destinations[localID] = if (operation == "copy") {
-                    copy(source, target, plan.anchor)
+                    copy(source, target, plan.anchor, targetNames)
                 } else if (plan.requiresCopy) {
-                    val copied = copy(source, target, plan.anchor)
+                    val copied = copy(source, target, plan.anchor, targetNames)
                     if (context.contentResolver.delete(source.uri, null, null) != 1) {
                         throw IOException("Could not remove source after copying")
                     }
                     copied
                 } else {
-                    relocate(source, target)
+                    relocate(source, target, targetNames)
                 }
             } catch (error: SecurityException) {
                 failures[localID] = "permissionDenied"
@@ -142,9 +144,14 @@ internal class DeviceFolderTransferService(private val context: Context) {
             }
         }
 
-    private fun copy(source: MediaItem, target: Destination, anchor: Uri?): Map<String, String> {
+    private fun copy(
+        source: MediaItem,
+        target: Destination,
+        anchor: Uri?,
+        targetNames: MutableSet<String>,
+    ): Map<String, String> {
         val resolver = context.contentResolver
-        val name = availableDisplayName(target, source.displayName)
+        val name = availableDisplayName(targetNames, source.displayName)
         val destination = resolver.insert(
             destinationCollection(source.mediaType, target.volumeName),
             ContentValues().apply {
@@ -156,40 +163,55 @@ internal class DeviceFolderTransferService(private val context: Context) {
             },
             placementExtras(anchor),
         ) ?: throw IOException("Could not create destination")
-        val copied = resolver.openInputStream(source.uri)?.use { input ->
-            resolver.openOutputStream(destination)?.use { output -> input.copyTo(output) }
-                ?: throw IOException("Could not open destination")
-        } ?: throw IOException("Could not open source")
-        if (source.size != null && copied != source.size) throw IOException("Copied byte count does not match source")
-        if (resolver.update(destination, ContentValues().apply {
-                put(MediaStore.MediaColumns.IS_PENDING, 0)
-            }, null, null) != 1) {
-            throw IOException("Could not publish destination")
+        try {
+            val copied = resolver.openInputStream(source.uri)?.use { input ->
+                resolver.openOutputStream(destination)?.use { output -> input.copyTo(output) }
+                    ?: throw IOException("Could not open destination")
+            } ?: throw IOException("Could not open source")
+            if (source.size != null && copied != source.size) {
+                Log.w(TAG, "Copied byte count differs from MediaStore size for ${source.uri}")
+            }
+            if (resolver.update(destination, ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }, null, null) != 1) {
+                throw IOException("Could not publish destination")
+            }
+            targetNames.add(name)
+        } catch (error: Exception) {
+            runCatching { resolver.delete(destination, null, null) }
+            throw error
         }
         return mapOf("localID" to ContentUris.parseId(destination).toString(), "displayName" to name)
     }
 
-    private fun relocate(source: MediaItem, target: Destination): Map<String, String> {
-        val name = availableDisplayName(target, source.displayName)
+    private fun relocate(
+        source: MediaItem,
+        target: Destination,
+        targetNames: MutableSet<String>,
+    ): Map<String, String> {
+        val name = availableDisplayName(targetNames, source.displayName)
         if (context.contentResolver.update(source.uri, ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, name)
                 put(MediaStore.MediaColumns.RELATIVE_PATH, target.relativePath)
             }, null, null) != 1) {
             throw IOException("MediaStore could not move source")
         }
+        targetNames.add(name)
         return mapOf("localID" to ContentUris.parseId(source.uri).toString(), "displayName" to name)
     }
 
     private fun plan(operation: String, source: MediaItem, target: Destination): Plan? {
         val requiresCopy = operation == "copy" || source.volumeName != target.volumeName
+        if (!requiresCopy) {
+            return if (supportsMediaTypeAtPath(source.mediaType, target.relativePath)) Plan(null, false) else null
+        }
         val anchor = destinationAnchorUri(target, source.mediaType)
-        if (!requiresCopy && !supportsMediaTypeAtPath(source.mediaType, target.relativePath)) return null
-        if (requiresCopy && anchor == null && !supportsMediaTypeAtPath(source.mediaType, target.relativePath)) return null
+        if (anchor == null && !supportsMediaTypeAtPath(source.mediaType, target.relativePath)) return null
         return Plan(anchor, requiresCopy)
     }
 
-    private fun availableDisplayName(target: Destination, sourceName: String): String {
-        if (!containsDisplayName(target, sourceName)) return sourceName
+    private fun availableDisplayName(names: Set<String>, sourceName: String): String {
+        if (sourceName !in names) return sourceName
         val extensionStart = sourceName.lastIndexOf('.').takeIf { it > 0 } ?: sourceName.length
         val baseName = sourceName.substring(0, extensionStart)
         val extension = sourceName.substring(extensionStart)
@@ -198,18 +220,22 @@ internal class DeviceFolderTransferService(private val context: Context) {
         do {
             candidate = "$baseName ($suffix)$extension"
             suffix++
-        } while (containsDisplayName(target, candidate))
+        } while (candidate in names)
         return candidate
     }
 
-    private fun containsDisplayName(target: Destination, displayName: String): Boolean =
+    private fun displayNames(target: Destination): Set<String> =
         context.contentResolver.query(
             MediaStore.Files.getContentUri(target.volumeName),
-            arrayOf(MediaStore.MediaColumns._ID),
-            "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=? AND ${MediaStore.MediaColumns.IS_PENDING}=0",
-            arrayOf(target.relativePath, displayName),
+            arrayOf(MediaStore.MediaColumns.DISPLAY_NAME),
+            "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.IS_PENDING}=0",
+            arrayOf(target.relativePath),
             null,
-        )?.use { it.moveToFirst() } ?: false
+        )?.use { cursor ->
+            buildSet {
+                while (cursor.moveToNext()) cursor.getString(0)?.let(::add)
+            }
+        } ?: emptySet()
 
     private fun destinationAnchorUri(target: Destination, mediaType: Int): Uri? {
         val id = context.contentResolver.query(
