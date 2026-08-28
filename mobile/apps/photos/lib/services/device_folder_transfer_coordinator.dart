@@ -24,8 +24,9 @@ class DeviceFolderTransferCoordinator {
     required DeviceCollection destination,
     int? cloudMoveSourceCollectionID,
   }) async {
-    final result = await LocalSyncService.instance.getLock().synchronized(
-      () async {
+    DeviceFolderTransferResult? deviceResult;
+    try {
+      return await LocalSyncService.instance.getLock().synchronized(() async {
         final folders = await FilesDB.instance.getDeviceCollections();
         final currentSource = folders.firstWhereOrNull(
           (folder) => folder.id == source.id,
@@ -67,6 +68,7 @@ class DeviceFolderTransferCoordinator {
         // stops before this transaction, the next syncAll reconciles them just
         // like a move made in the system Files app.
         final result = await _client.transfer(request);
+        deviceResult = result;
         if (result.destinations.isEmpty) return result;
 
         await reconcileDeviceFolderTransfer(
@@ -104,28 +106,31 @@ class DeviceFolderTransferCoordinator {
           );
         }
         return result;
-      },
-    );
-    if (result.destinations.isNotEmpty) {
-      try {
-        await LocalSyncService.instance.syncAll();
-      } catch (error, stackTrace) {
-        _logger.warning(
-          'Could not refresh local state after device-folder transfer',
-          error,
-          stackTrace,
-        );
-      }
-      if (request.operation == DeviceFolderTransferOperation.move) {
-        Bus.instance.fire(
-          LocalPhotosUpdatedEvent(
-            const <EnteFile>[],
-            source: 'deviceFolderTransfer',
-          ),
-        );
+      });
+    } finally {
+      final result = deviceResult;
+      if (result != null && result.destinations.isNotEmpty) {
+        // A cloud-move error still propagates, but the completed MediaStore
+        // transfer must be reflected locally before the caller handles it.
+        try {
+          await LocalSyncService.instance.syncAll();
+        } catch (error, stackTrace) {
+          _logger.warning(
+            'Could not refresh local state after device-folder transfer',
+            error,
+            stackTrace,
+          );
+        }
+        if (request.operation == DeviceFolderTransferOperation.move) {
+          Bus.instance.fire(
+            LocalPhotosUpdatedEvent(
+              const <EnteFile>[],
+              source: 'deviceFolderTransfer',
+            ),
+          );
+        }
       }
     }
-    return result;
   }
 
   static Future<void> reconcileDeviceFolderTransfer(
