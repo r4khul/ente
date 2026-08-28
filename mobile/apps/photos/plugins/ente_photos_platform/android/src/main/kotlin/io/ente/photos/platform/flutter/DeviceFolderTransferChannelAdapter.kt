@@ -43,10 +43,11 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         startPendingConsentRequest()
     }
 
-    fun detachActivity() {
+    fun detachActivity(cancelPendingTransfer: Boolean) {
         activityBinding?.removeActivityResultListener(this)
         activityBinding = null
         activity = null
+        if (cancelPendingTransfer) completeWithFailures("cancelled")
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -57,8 +58,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
             }
             "deviceFolderTransfer.eligibleDestinations" -> {
                 val operation = arguments["operation"] as? String
-                val allowsReplacementLocalID =
-                    arguments["identityPolicy"] == "allowReplacementLocalID"
                 val ids = arguments["candidateFolderIDs"] as? List<*> ?: emptyList<Any>()
                 val sourceLocalIDs = arguments["sourceLocalIDs"] as? List<*> ?: emptyList<Any>()
                 transferExecutor.execute {
@@ -66,7 +65,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                         val eligibleIDs = service.eligibleDestinationIDs(
                             operation,
                             arguments["sourceFolderID"] as? String ?: "",
-                            allowsReplacementLocalID,
                             ids.filterIsInstance<String>(),
                             sourceLocalIDs.filterIsInstance<String>(),
                         )
@@ -93,8 +91,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                     ?.toMap()
                 val operation = arguments["operation"] as? String
                 val source = arguments["sourceFolderID"] as? String
-                val allowsReplacementLocalID =
-                    arguments["identityPolicy"] == "allowReplacementLocalID"
                 val target = arguments["targetFolderID"] as? String
                 val ids = (arguments["sourceLocalIDs"] as? List<*>)?.filterIsInstance<String>()
                 if (operation == null || source == null || target == null || ids == null) {
@@ -106,7 +102,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                         recoveryContext,
                         source,
                         target,
-                        allowsReplacementLocalID,
                         ids,
                         result,
                     )
@@ -195,7 +190,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
     }
 
     fun detach() {
-        detachActivity()
+        detachActivity(cancelPendingTransfer = true)
         isDetached = true
         mainHandler.removeCallbacksAndMessages(null)
         transferExecutor.shutdown()
@@ -207,7 +202,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         recoveryContext: Map<String, Any>?,
         source: String,
         target: String,
-        allowsReplacementLocalID: Boolean,
         ids: List<String>,
         result: MethodChannel.Result,
     ) {
@@ -216,6 +210,8 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
             return
         }
         isTransferInProgress = true
+        pendingResult = result
+        pendingLocalIDs = ids
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || operation == "copy") {
             runTransfer(
                 transferID,
@@ -223,7 +219,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                 operation,
                 source,
                 target,
-                allowsReplacementLocalID,
                 ids,
                 result,
             )
@@ -233,21 +228,20 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
             try {
                 val uris = ids.mapNotNull(service::mediaUri)
                 postToMain {
+                    if (pendingResult !== result) return@postToMain
                     if (uris.isEmpty()) {
+                        pendingTransfer = null
                         runTransfer(
                             transferID,
                             recoveryContext,
                             operation,
                             source,
                             target,
-                            allowsReplacementLocalID,
                             ids,
                             result,
                         )
                         return@postToMain
                     }
-                    pendingResult = result
-                    pendingLocalIDs = ids
                     pendingTransfer = {
                         runTransfer(
                             transferID,
@@ -255,7 +249,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                             operation,
                             source,
                             target,
-                            allowsReplacementLocalID,
                             ids,
                             result,
                         )
@@ -267,12 +260,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                 }
             } catch (error: Exception) {
                 postToMain {
-                    result.error(
-                        "device_folder_transfer_failed",
-                        error.message,
-                        null,
-                    )
-                    isTransferInProgress = false
+                    completeWithError(error)
                 }
             }
         }
@@ -280,16 +268,15 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
 
     private fun startPendingConsentRequest() {
         if (isConsentRequestInProgress) return
+        val uris = pendingConsentBatches?.firstOrNull() ?: return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             completeWithFailures("unsupported")
             return
         }
         val host = activity
         if (host == null) {
-            completeWithFailures("failed")
             return
         }
-        val uris = pendingConsentBatches?.firstOrNull() ?: return
         try {
             isConsentRequestInProgress = true
             host.startIntentSenderForResult(
@@ -318,7 +305,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                 startPendingConsentRequest()
             } else {
                 val transfer = pendingTransfer
-                clearPending()
+                clearPendingConsent()
                 transfer?.invoke()
             }
         } else {
@@ -334,7 +321,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         isTransferInProgress = false
         result.success(
             mapOf(
-                "successLocalIDs" to emptyList<String>(),
+                "destinations" to emptyMap<String, Map<String, String>>(),
                 "failures" to localIDs.associateWith { failure },
             ),
         )
@@ -342,10 +329,25 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
 
     private fun clearPending() {
         pendingResult = null
-        pendingTransfer = null
         pendingLocalIDs = emptyList()
+        clearPendingConsent()
+    }
+
+    private fun clearPendingConsent() {
+        pendingTransfer = null
         pendingConsentBatches = null
         isConsentRequestInProgress = false
+    }
+
+    private fun completeWithError(error: Exception) {
+        val result = pendingResult ?: return
+        clearPending()
+        isTransferInProgress = false
+        result.error(
+            "device_folder_transfer_failed",
+            error.message,
+            null,
+        )
     }
 
     private fun runTransfer(
@@ -354,7 +356,6 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         operation: String,
         source: String,
         target: String,
-        allowsReplacementLocalID: Boolean,
         ids: List<String>,
         result: MethodChannel.Result,
     ) {
@@ -366,21 +367,17 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                     operation,
                     source,
                     target,
-                    allowsReplacementLocalID,
                     ids,
                 )
                 postToMain {
+                    if (pendingResult !== result) return@postToMain
+                    clearPending()
                     isTransferInProgress = false
                     result.success(transferResult)
                 }
             } catch (error: Exception) {
                 postToMain {
-                    isTransferInProgress = false
-                    result.error(
-                        "device_folder_transfer_failed",
-                        error.message,
-                        null,
-                    )
+                    if (pendingResult === result) completeWithError(error)
                 }
             }
         }

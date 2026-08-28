@@ -39,7 +39,6 @@ import 'package:photos/services/device_folder_transfer_coordinator.dart';
 import 'package:photos/services/hidden_service.dart';
 import 'package:photos/services/machine_learning/face_ml/feedback/cluster_feedback.dart';
 import "package:photos/services/machine_learning/face_ml/person/person_service.dart";
-import "package:photos/services/sync/local_sync_service.dart";
 import "package:photos/theme/colors.dart";
 import "package:photos/theme/ente_theme.dart";
 import 'package:photos/ui/actions/collection/collection_file_actions.dart';
@@ -121,15 +120,6 @@ class _FileSelectionActionsWidgetState
   bool _supportsDeviceFolderTransfer(DeviceFolderTransferOperation operation) =>
       _canTransferWithinDeviceFolders &&
       _supportedDeviceFolderTransferOperations.contains(operation);
-
-  DeviceFolderTransferIdentityPolicy _identityPolicyFor(
-    DeviceFolderTransferOperation operation,
-    DeviceCollection source,
-  ) => operation == DeviceFolderTransferOperation.move
-      ? DeviceFolderTransferIdentityPolicy.allowReplacementLocalID
-      : source.shouldBackup
-      ? DeviceFolderTransferIdentityPolicy.preserveSourceLocalID
-      : DeviceFolderTransferIdentityPolicy.allowReplacementLocalID;
 
   bool get _canRemoveOthersFiles =>
       widget.collection != null &&
@@ -775,6 +765,13 @@ class _FileSelectionActionsWidgetState
         .toSet()
         .toList(growable: false);
     if (localIDs.isEmpty) return;
+    final sourceRecordIDs = operation == DeviceFolderTransferOperation.move
+        ? <String, int>{
+            for (final file in selected)
+              if (file.localID != null && file.generatedID != null)
+                file.localID!: file.generatedID!,
+          }
+        : const <String, int>{};
 
     try {
       final destination = await showDeviceFolderActionSheet(
@@ -842,31 +839,21 @@ class _FileSelectionActionsWidgetState
               ),
       );
       await dialog.show();
-      widget.selectedFiles.clearAll();
       late final DeviceFolderTransferResult result;
       try {
         result = await DeviceFolderTransferCoordinator.instance.transfer(
           source: source,
           destination: destination,
-          uploadedSourceLocalIDs: uploadedSourceLocalIDs,
+          sourceRecordIDs: sourceRecordIDs,
           cloudMove: cloudMove,
           request: DeviceFolderTransferRequest(
             operation: operation,
             sourceFolderID: source.id,
-            identityPolicy: _identityPolicyFor(operation, source),
             targetFolderID: destination.id,
             sourceLocalIDs: localIDs,
           ),
         );
         if (result.wasCancelled) return;
-        if (result.successLocalIDs.isNotEmpty) {
-          await LocalSyncService.instance.syncAll(
-            explicitlyRemovedPathToLocalIDs:
-                operation == DeviceFolderTransferOperation.move
-                ? {source.id: result.successLocalIDs}
-                : const {},
-          );
-        }
       } finally {
         await dialog.hide();
         if (mounted) {
@@ -878,6 +865,7 @@ class _FileSelectionActionsWidgetState
       if (!mounted) return;
       final failures = result.failures.length;
       if (failures == 0 && result.successLocalIDs.isNotEmpty) {
+        widget.selectedFiles.clearAll();
         showShortToast(
           context,
           operation == DeviceFolderTransferOperation.move
@@ -889,6 +877,19 @@ class _FileSelectionActionsWidgetState
                   count: result.successLocalIDs.length,
                   albumName: destination.name,
                 ),
+        );
+      } else if (result.successLocalIDs.isNotEmpty) {
+        widget.selectedFiles.unSelectAll(
+          selected
+              .where((file) => result.successLocalIDs.contains(file.localID))
+              .toSet(),
+        );
+        showToast(
+          context,
+          context.strings.partiallyTransferredItems(
+            completedCount: result.successLocalIDs.length,
+            failedCount: failures,
+          ),
         );
       } else {
         showToast(context, context.strings.somethingWentWrongPleaseTryAgain);
@@ -925,7 +926,6 @@ class _FileSelectionActionsWidgetState
         .eligibleDestinationIDs(
           sourceFolderID: source.id,
           operation: operation,
-          identityPolicy: _identityPolicyFor(operation, source),
           sourceLocalIDs: sourceLocalIDs,
           candidateFolderIDs: candidates.map((folder) => folder.id).toList(),
         );

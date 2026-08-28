@@ -2962,6 +2962,18 @@
       }
     }
   },
+  "partiallyTransferredItems": "{completedCount, plural, one{Transferred {completedCount} item} other{Transferred {completedCount} items}}; {failedCount} failed.",
+  "@partiallyTransferredItems": {
+    "description": "Shown after a device-folder copy or move when some items completed and some did not.",
+    "placeholders": {
+      "completedCount": {
+        "type": "int"
+      },
+      "failedCount": {
+        "type": "int"
+      }
+    }
+  },
   "pending": "Pending",
   "pendingSync": "Pending sync",
   "pendingSyncs": "Warning",

@@ -3,38 +3,38 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('encodes the transfer identity policy', () {
+  test('encodes the transfer operation', () {
     const request = DeviceFolderTransferRequest(
       operation: DeviceFolderTransferOperation.move,
       sourceFolderID: 'source',
-      identityPolicy:
-          DeviceFolderTransferIdentityPolicy.allowReplacementLocalID,
       targetFolderID: 'target',
       sourceLocalIDs: ['one'],
       recoveryContext: {'ownerID': 7},
     );
 
     expect(
-      request.toChannelMap()['identityPolicy'],
-      DeviceFolderTransferIdentityPolicy.allowReplacementLocalID.name,
+      request.toChannelMap()['operation'],
+      DeviceFolderTransferOperation.move.name,
     );
   });
 
-  test('encodes an optional transfer ID', () {
+  test('copies a request while adding recovery information', () {
     const request = DeviceFolderTransferRequest(
       operation: DeviceFolderTransferOperation.move,
       sourceFolderID: 'source',
-      identityPolicy:
-          DeviceFolderTransferIdentityPolicy.allowReplacementLocalID,
       targetFolderID: 'target',
       sourceLocalIDs: ['one'],
+    );
+    final recovered = request.copyWith(
       transferID: 'transfer-id',
+      recoveryContext: const {'ownerID': 7},
     );
 
-    expect(request.toChannelMap()['transferID'], 'transfer-id');
+    expect(recovered.toChannelMap()['transferID'], 'transfer-id');
+    expect(recovered.toChannelMap()['recoveryContext'], {'ownerID': 7});
   });
 
-  test('passes the identity policy while loading destinations', () async {
+  test('passes operation while loading destinations', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
     const channel = MethodChannel('device-folder-transfer-test');
     MethodCall? receivedCall;
@@ -52,8 +52,6 @@ void main() {
         .eligibleDestinationIDs(
           sourceFolderID: 'source',
           operation: DeviceFolderTransferOperation.move,
-          identityPolicy:
-              DeviceFolderTransferIdentityPolicy.preserveSourceLocalID,
           sourceLocalIDs: ['file-1'],
           candidateFolderIDs: ['destination'],
         );
@@ -61,10 +59,7 @@ void main() {
     expect(result, {'destination'});
     expect(
       receivedCall?.arguments,
-      containsPair(
-        'identityPolicy',
-        DeviceFolderTransferIdentityPolicy.preserveSourceLocalID.name,
-      ),
+      containsPair('operation', DeviceFolderTransferOperation.move.name),
     );
   });
 
@@ -90,13 +85,15 @@ void main() {
 
   test('decodes valid per-file transfer outcomes', () {
     final result = DeviceFolderTransferResult.fromChannelMap({
-      'successLocalIDs': ['one'],
-      'destinationLocalIDs': {'one': 'new-one'},
+      'destinations': {
+        'one': {'localID': 'new-one', 'displayName': 'new-name.jpg'},
+      },
       'failures': {'two': 'missingSource', 'three': 'unknown'},
     });
 
     expect(result.successLocalIDs, {'one'});
     expect(result.destinationLocalIDs, {'one': 'new-one'});
+    expect(result.destinations['one']?.displayName, 'new-name.jpg');
     expect(result.failures['two'], DeviceFolderTransferFailure.missingSource);
     expect(result.failures['three'], DeviceFolderTransferFailure.failed);
   });
@@ -110,23 +107,51 @@ void main() {
     expect(result.wasCancelled, isTrue);
   });
 
+  test('decodes a legacy destination without a display name', () {
+    final result = DeviceFolderTransferResult.fromChannelMap({
+      'destinationLocalIDs': {'one': 'new-one'},
+      'failures': <String, String>{},
+    });
+
+    expect(result.destinations['one']?.displayName, isNull);
+  });
+
+  test('retains an unresolved move journal', () {
+    final result = DeviceFolderTransferResult.fromChannelMap({
+      'destinations': <String, Map<String, String>>{},
+      'failures': {'one': 'failed'},
+      'requiresRecovery': true,
+    });
+
+    expect(result.requiresRecovery, isTrue);
+  });
+
   test('decodes a native transfer recovery record', () {
     final recovery = DeviceFolderTransferRecovery.fromChannelMap({
       'transferID': 'transfer-id',
       'sourceFolderID': 'source',
       'targetFolderID': 'target',
       'sourceLocalIDs': ['one'],
+      'sourceRecordIDs': {'one': 11},
+      'cloudMoveSourceUploadedFileIDs': {
+        'one': [21],
+      },
       'ownerID': 7,
       'cloudMoveCompleted': false,
       'cloudMoveSourceCollectionID': 9,
       'cloudMoveSourceLocalIDs': ['one'],
-      'successLocalIDs': ['one'],
-      'destinationLocalIDs': {'one': 'new-one'},
+      'destinations': {
+        'one': {'localID': 'new-one', 'displayName': 'new-name.jpg'},
+      },
       'failures': <String, String>{},
     });
 
     expect(recovery.transferID, 'transfer-id');
     expect(recovery.sourceLocalIDs, {'one'});
+    expect(recovery.sourceRecordIDs, {'one': 11});
+    expect(recovery.cloudMoveSourceUploadedFileIDs, {
+      'one': [21],
+    });
     expect(recovery.ownerID, 7);
     expect(recovery.cloudMoveSourceCollectionID, 9);
     expect(recovery.cloudMoveSourceLocalIDs, {'one'});

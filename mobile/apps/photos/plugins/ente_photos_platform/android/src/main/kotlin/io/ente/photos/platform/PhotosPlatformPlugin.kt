@@ -25,7 +25,7 @@ class PhotosPlatformPlugin : FlutterPlugin, ActivityAware {
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
-        channelRouter.detachActivity()
+        channelRouter.detachActivityForConfigChanges()
     }
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {

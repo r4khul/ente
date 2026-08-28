@@ -28,65 +28,272 @@ void main() {
   });
 
   test(
-    "keeps a pending same-volume move available for destination backup",
+    "moves a pending row directly instead of deleting and rediscovering it",
     () async {
       final db = await FilesDB.instance.sqliteAsyncDB;
       await db.execute("INSERT INTO device_files (id, path_id) VALUES (?, ?)", [
         "42",
         "source",
       ]);
-      await db.execute("INSERT INTO device_files (id, path_id) VALUES (?, ?)", [
-        "42",
-        "destination",
-      ]);
       await db.execute(
         """
-        INSERT INTO files (
-          local_id,
-          uploaded_file_id,
-          collection_id,
-          title,
-          modification_time,
-          creation_time
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        """,
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
         ["42", -1, 101, "image.jpg", "1", "1"],
       );
+      final row = await db.get(
+        "SELECT _id FROM files WHERE collection_id = ?",
+        [101],
+      );
 
-      await FilesDB.instance.reconcileRemovedDeviceFolderMappings(
-        mappingsToRemove: {
-          "source": {"42"},
+      await FilesDB.instance.reconcileDeviceFolderMove(
+        sourcePathID: "source",
+        targetPathID: "destination",
+        targetFolderName: "Destination",
+        destinations: const {
+          "42": (localID: "42", displayName: "image (1).jpg"),
         },
-        pendingMappingsToRemove: {
-          "source": {"42"},
-        },
-        automaticBackupCollectionIDsByPath: {"source": 101},
-        pendingMoves: [
-          const PendingDeviceFolderMove(
-            sourceCollectionID: 101,
-            destinationFolderName: "Destination",
-            localIDs: {"42"},
-          ),
+        sourceRecordIDs: {"42": row["_id"] as int},
+        cloudMovedSourceUploadedFileIDs: const {},
+      );
+
+      expect(
+        await db.getAll(
+          "SELECT local_id, collection_id, title, device_folder FROM files",
+        ),
+        [
+          {
+            "local_id": "42",
+            "collection_id": null,
+            "title": "image (1).jpg",
+            "device_folder": "Destination",
+          },
         ],
       );
-
-      final files = await db.getAll(
-        "SELECT collection_id, device_folder FROM files WHERE local_id = ?",
-        ["42"],
-      );
-      final mappings = await db.getAll(
-        "SELECT path_id FROM device_files WHERE id = ?",
-        ["42"],
-      );
-
-      expect(files, [
-        {"collection_id": null, "device_folder": "Destination"},
-      ]);
-      expect(mappings, [
-        {"path_id": "destination"},
+      expect(await db.getAll("SELECT id, path_id FROM device_files"), [
+        {"id": "42", "path_id": "destination"},
       ]);
     },
   );
+
+  test(
+    "keeps the stored title when a legacy result has no display name",
+    () async {
+      final db = await FilesDB.instance.sqliteAsyncDB;
+      await db.execute("INSERT INTO device_files (id, path_id) VALUES (?, ?)", [
+        "42",
+        "source",
+      ]);
+      await db.execute(
+        """
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
+        ["42", -1, 101, "image.jpg", "1", "1"],
+      );
+      final row = await db.get(
+        "SELECT _id FROM files WHERE collection_id = ?",
+        [101],
+      );
+
+      await FilesDB.instance.reconcileDeviceFolderMove(
+        sourcePathID: "source",
+        targetPathID: "destination",
+        targetFolderName: "Destination",
+        destinations: const {"42": (localID: "42", displayName: null)},
+        sourceRecordIDs: {"42": row["_id"] as int},
+        cloudMovedSourceUploadedFileIDs: const {},
+      );
+
+      expect(await db.get("SELECT title FROM files"), {"title": "image.jpg"});
+    },
+  );
+
+  test("updates every representation of the selected uploaded file", () async {
+    final db = await FilesDB.instance.sqliteAsyncDB;
+    await db.execute("INSERT INTO device_files (id, path_id) VALUES (?, ?)", [
+      "42",
+      "source",
+    ]);
+    await db.execute(
+      """
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
+      ["42", 77, 101, "selected.jpg", "1", "1"],
+    );
+    await db.execute(
+      """
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
+      ["42", 77, 202, "same-uploaded-file.jpg", "1", "1"],
+    );
+    await db.execute(
+      """
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
+      ["42", 88, 303, "unrelated.jpg", "1", "1"],
+    );
+    final selected = await db.get(
+      "SELECT _id FROM files WHERE collection_id = ?",
+      [101],
+    );
+
+    await FilesDB.instance.reconcileDeviceFolderMove(
+      sourcePathID: "source",
+      targetPathID: "destination",
+      targetFolderName: "Destination",
+      destinations: const {
+        "42": (localID: "99", displayName: "selected (1).jpg"),
+      },
+      sourceRecordIDs: {"42": selected["_id"] as int},
+      cloudMovedSourceUploadedFileIDs: const {},
+    );
+
+    expect(
+      await db.getAll(
+        "SELECT local_id, collection_id FROM files ORDER BY collection_id",
+      ),
+      [
+        {"local_id": "99", "collection_id": 101},
+        {"local_id": "99", "collection_id": 202},
+        {"local_id": "42", "collection_id": 303},
+      ],
+    );
+  });
+
+  test(
+    "updates uploaded siblings when the selected local row is pending",
+    () async {
+      final db = await FilesDB.instance.sqliteAsyncDB;
+      await db.execute("INSERT INTO device_files (id, path_id) VALUES (?, ?)", [
+        "42",
+        "source",
+      ]);
+      await db.execute(
+        """
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
+        ["42", -1, 101, "pending.jpg", "1", "1"],
+      );
+      await db.execute(
+        """
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
+        ["42", 77, 202, "moved.jpg", "1", "1"],
+      );
+      await db.execute(
+        """
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
+        ["42", 77, 303, "linked.jpg", "1", "1"],
+      );
+      final row = await db.get(
+        "SELECT _id FROM files WHERE local_id = ? AND uploaded_file_id = ?",
+        ["42", -1],
+      );
+
+      await FilesDB.instance.reconcileDeviceFolderMove(
+        sourcePathID: "source",
+        targetPathID: "destination",
+        targetFolderName: "Destination",
+        destinations: const {
+          "42": (localID: "99", displayName: "pending (1).jpg"),
+        },
+        sourceRecordIDs: {"42": row["_id"] as int},
+        cloudMovedSourceUploadedFileIDs: const {},
+      );
+
+      expect(
+        await db.getAll(
+          "SELECT local_id, collection_id FROM files ORDER BY collection_id",
+        ),
+        [
+          {"local_id": "99", "collection_id": null},
+          {"local_id": "99", "collection_id": 202},
+          {"local_id": "99", "collection_id": 303},
+        ],
+      );
+      expect(await db.getAll("SELECT id, path_id FROM device_files"), [
+        {"id": "99", "path_id": "destination"},
+      ]);
+    },
+  );
+
+  test("updates explicit cloud-moved uploaded records", () async {
+    final db = await FilesDB.instance.sqliteAsyncDB;
+    await db.execute("INSERT INTO device_files (id, path_id) VALUES (?, ?)", [
+      "42",
+      "source",
+    ]);
+    await db.execute(
+      """
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
+      ["42", -1, 101, "pending.jpg", "1", "1"],
+    );
+    await db.execute(
+      """
+      INSERT INTO files (
+        local_id, uploaded_file_id, collection_id, title, modification_time,
+        creation_time
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      """,
+      ["uploaded-source", 77, 202, "moved.jpg", "1", "1"],
+    );
+    final row = await db.get(
+      "SELECT _id FROM files WHERE local_id = ? AND uploaded_file_id = ?",
+      ["42", -1],
+    );
+
+    await FilesDB.instance.reconcileDeviceFolderMove(
+      sourcePathID: "source",
+      targetPathID: "destination",
+      targetFolderName: "Destination",
+      destinations: const {
+        "42": (localID: "99", displayName: "pending (1).jpg"),
+      },
+      sourceRecordIDs: {"42": row["_id"] as int},
+      cloudMovedSourceUploadedFileIDs: const {
+        "42": [77],
+      },
+    );
+
+    expect(
+      await db.getAll(
+        "SELECT local_id, collection_id FROM files ORDER BY collection_id",
+      ),
+      [
+        {"local_id": "99", "collection_id": null},
+        {"local_id": "99", "collection_id": 202},
+      ],
+    );
+  });
 }
 
 class _FakePathProvider extends PathProviderPlatform {

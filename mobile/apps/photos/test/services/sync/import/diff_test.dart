@@ -3,7 +3,7 @@ import 'package:photos/services/sync/import/diff.dart';
 import 'package:photos/services/sync/import/model.dart';
 
 void main() {
-  test('removes successful move IDs when a device folder disappears', () {
+  test('reports a folder membership move as an ordinary mapping change', () {
     final result = getLocalAssetsDiffForTesting(
       assets: [
         LocalPathAsset(
@@ -16,37 +16,11 @@ void main() {
       pathToLocalIDs: {
         'source': {'file-1'},
       },
-      explicitlyRemovedPathToLocalIDs: {
-        'source': {'file-1'},
-      },
     );
 
     expect(result.newPathToLocalIDs, {
       'destination': {'file-1'},
     });
-    expect(result.deletePathToLocalIDs, {
-      'source': {'file-1'},
-    });
-  });
-
-  test('does not remove memberships that remain in an observed folder', () {
-    final result = getLocalAssetsDiffForTesting(
-      assets: [
-        LocalPathAsset(
-          pathID: 'source',
-          pathName: 'Source',
-          localIDs: {'file-1'},
-        ),
-      ],
-      existingIDs: {'file-1'},
-      pathToLocalIDs: {
-        'source': {'file-1'},
-      },
-      explicitlyRemovedPathToLocalIDs: {
-        'source': {'file-1'},
-      },
-    );
-
     expect(result.deletePathToLocalIDs, isEmpty);
   });
 
@@ -65,9 +39,6 @@ void main() {
       ],
       existingIDs: {'file-1'},
       pathToLocalIDs: previousMappings,
-      explicitlyRemovedPathToLocalIDs: {
-        'source': {'file-2'},
-      },
     );
 
     expect(previousMappings, {
@@ -75,68 +46,21 @@ void main() {
     });
   });
 
-  test(
-    'does not infer removals for folders absent from an otherwise valid scan',
-    () {
-      final result = getLocalAssetsDiffForTesting(
-        assets: [
-          LocalPathAsset(
-            pathID: 'another-folder',
-            pathName: 'Another folder',
-            localIDs: {'file-2'},
-          ),
-        ],
-        existingIDs: const {},
-        pathToLocalIDs: {
-          'source': {'file-1'},
-        },
-      );
-
-      expect(result.deletePathToLocalIDs, isEmpty);
-    },
-  );
-
-  test('does not remove a successful move ID still observed in its source', () {
+  test('does not infer removals for folders absent from a valid scan', () {
     final result = getLocalAssetsDiffForTesting(
       assets: [
         LocalPathAsset(
-          pathID: 'source',
-          pathName: 'Source',
-          localIDs: {'file-1'},
+          pathID: 'another-folder',
+          pathName: 'Another folder',
+          localIDs: {'file-2'},
         ),
       ],
-      existingIDs: {'file-1'},
+      existingIDs: const {},
       pathToLocalIDs: {
-        'source': {'file-1'},
-      },
-      explicitlyRemovedPathToLocalIDs: {
         'source': {'file-1'},
       },
     );
 
     expect(result.deletePathToLocalIDs, isEmpty);
-  });
-
-  test('reports an explicit move after its source mapping was reconciled', () {
-    final result = getLocalAssetsDiffForTesting(
-      assets: [
-        LocalPathAsset(
-          pathID: 'destination',
-          pathName: 'Destination',
-          localIDs: {'file-1'},
-        ),
-      ],
-      existingIDs: {'file-1'},
-      pathToLocalIDs: {
-        'destination': {'file-1'},
-      },
-      explicitlyRemovedPathToLocalIDs: {
-        'source': {'file-1'},
-      },
-    );
-
-    expect(result.deletePathToLocalIDs, {
-      'source': {'file-1'},
-    });
   });
 }

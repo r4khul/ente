@@ -30,49 +30,6 @@ import "package:shared_preferences/shared_preferences.dart";
 import "package:synchronized/synchronized.dart";
 import "package:tuple/tuple.dart";
 
-List<PendingDeviceFolderMove> _pendingDeviceFolderMoves({
-  required Map<String, Set<String>> explicitlyRemovedMappings,
-  required Iterable<LocalPathAsset> localAssets,
-  required Map<String, int> automaticBackupCollectionIDsByPath,
-  required Map<String, String> deviceFolderNamesByPath,
-}) {
-  final destinationFolderNamesByLocalID = <String, String>{};
-  for (final asset in localAssets) {
-    final destinationFolderName = deviceFolderNamesByPath[asset.pathID];
-    if (destinationFolderName == null) continue;
-    for (final localID in asset.localIDs) {
-      destinationFolderNamesByLocalID.putIfAbsent(
-        localID,
-        () => destinationFolderName,
-      );
-    }
-  }
-
-  final pendingMoves = <PendingDeviceFolderMove>[];
-  for (final entry in explicitlyRemovedMappings.entries) {
-    final sourceCollectionID = automaticBackupCollectionIDsByPath[entry.key];
-    if (sourceCollectionID == null) continue;
-    final localIDsByDestinationFolderName = <String, Set<String>>{};
-    for (final localID in entry.value) {
-      final destinationFolderName = destinationFolderNamesByLocalID[localID];
-      if (destinationFolderName == null) continue;
-      localIDsByDestinationFolderName
-          .putIfAbsent(destinationFolderName, () => <String>{})
-          .add(localID);
-    }
-    for (final entry in localIDsByDestinationFolderName.entries) {
-      pendingMoves.add(
-        PendingDeviceFolderMove(
-          sourceCollectionID: sourceCollectionID,
-          destinationFolderName: entry.key,
-          localIDs: entry.value,
-        ),
-      );
-    }
-  }
-  return pendingMoves;
-}
-
 class LocalSyncService {
   final _logger = Logger("LocalSyncService");
   final _db = FilesDB.instance;
@@ -224,17 +181,9 @@ class LocalSyncService {
     return hasUpdated;
   }
 
-  Future<bool> syncAll({
-    Map<String, Set<String>> explicitlyRemovedPathToLocalIDs = const {},
-  }) => _lock.synchronized(
-    () => _syncAll(
-      explicitlyRemovedPathToLocalIDs: explicitlyRemovedPathToLocalIDs,
-    ),
-  );
+  Future<bool> syncAll() => _lock.synchronized(_syncAll);
 
-  Future<bool> _syncAll({
-    required Map<String, Set<String>> explicitlyRemovedPathToLocalIDs,
-  }) async {
+  Future<bool> _syncAll() async {
     if (!Configuration.instance.isLoggedIn()) {
       if (!isLocalGalleryMode) {
         _logger.warning("syncAll called when user is not logged in");
@@ -246,12 +195,6 @@ class LocalSyncService {
     final localAssets = await getAllLocalAssets(
       needsTitle: isLocalGalleryMode ? true : null,
     );
-    final previousDeviceCollections = await _db.getDeviceCollections();
-    final previousAutomaticBackupCollectionIDsByPath = <String, int>{
-      for (final deviceCollection in previousDeviceCollections)
-        if (deviceCollection.shouldBackup && deviceCollection.hasCollectionID())
-          deviceCollection.id: deviceCollection.collectionID!,
-    };
     final previousPathToLocalIDs = await _db.getDevicePathIDToLocalIDMap();
     _logger.info(
       "Loading allLocalAssets ${localAssets.length} took ${stopwatch.elapsedMilliseconds}ms ",
@@ -260,19 +203,12 @@ class LocalSyncService {
     _logger.info(
       "refreshDeviceFolderCountAndCover + allLocalAssets took ${stopwatch.elapsedMilliseconds}ms ",
     );
-    final deviceFolderNamesByPath = explicitlyRemovedPathToLocalIDs.isEmpty
-        ? const <String, String>{}
-        : {
-            for (final deviceCollection in await _db.getDeviceCollections())
-              deviceCollection.id: deviceCollection.name,
-          };
     final int ownerID = Configuration.instance.getUserIDV2();
     final existingLocalFileIDs = await _db.getExistingLocalFileIDs(ownerID);
     final localDiffResult = await getDiffFromExistingImport(
       localAssets,
       existingLocalFileIDs,
       previousPathToLocalIDs,
-      explicitlyRemovedPathToLocalIDs: explicitlyRemovedPathToLocalIDs,
     );
     bool hasAnyMappingChanged = false;
     if (localDiffResult.newPathToLocalIDs?.isNotEmpty ?? false) {
@@ -282,26 +218,8 @@ class LocalSyncService {
       hasAnyMappingChanged = true;
     }
     if (localDiffResult.deletePathToLocalIDs?.isNotEmpty ?? false) {
-      final explicitlyRemovedMappings = <String, Set<String>>{
-        for (final entry in explicitlyRemovedPathToLocalIDs.entries)
-          if (localDiffResult.deletePathToLocalIDs!.containsKey(entry.key))
-            entry.key: entry.value.intersection(
-              localDiffResult.deletePathToLocalIDs![entry.key]!,
-            ),
-      };
-      final pendingMoves = _pendingDeviceFolderMoves(
-        explicitlyRemovedMappings: explicitlyRemovedMappings,
-        localAssets: localAssets,
-        automaticBackupCollectionIDsByPath:
-            previousAutomaticBackupCollectionIDsByPath,
-        deviceFolderNamesByPath: deviceFolderNamesByPath,
-      );
-      await _db.reconcileRemovedDeviceFolderMappings(
-        mappingsToRemove: localDiffResult.deletePathToLocalIDs!,
-        pendingMappingsToRemove: explicitlyRemovedMappings,
-        automaticBackupCollectionIDsByPath:
-            previousAutomaticBackupCollectionIDsByPath,
-        pendingMoves: pendingMoves,
+      await _db.deletePathIDToLocalIDMapping(
+        localDiffResult.deletePathToLocalIDs!,
       );
       hasAnyMappingChanged = true;
     }

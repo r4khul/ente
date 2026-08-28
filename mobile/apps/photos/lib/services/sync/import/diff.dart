@@ -25,14 +25,12 @@ class LocalDiffResult {
 Future<LocalDiffResult> getDiffFromExistingImport(
   List<LocalPathAsset> assets,
   Set<String> existingIDs,
-  Map<String, Set<String>> pathToLocalIDs, {
-  Map<String, Set<String>> explicitlyRemovedPathToLocalIDs = const {},
-}) async {
+  Map<String, Set<String>> pathToLocalIDs,
+) async {
   final Map<String, dynamic> args = <String, dynamic>{};
   args['assets'] = assets;
   args['existingIDs'] = existingIDs;
   args['pathToLocalIDs'] = pathToLocalIDs;
-  args['explicitlyRemovedPathToLocalIDs'] = explicitlyRemovedPathToLocalIDs;
   final LocalDiffResult diffResult = await Computer.shared().compute(
     _getLocalAssetsDiff,
     param: args,
@@ -74,17 +72,10 @@ LocalDiffResult _getLocalAssetsDiff(Map<String, dynamic> args) {
   final List<LocalPathAsset> onDeviceLocalPathAsset = args['assets'];
   final Set<String> existingIDs = args['existingIDs'];
   final Map<String, Set<String>> pathToLocalIDs = args['pathToLocalIDs'];
-  final Map<String, Set<String>> explicitlyRemovedPathToLocalIDs =
-      args['explicitlyRemovedPathToLocalIDs'] ?? const {};
   final Map<String, Set<String>> newPathToLocalIDs = <String, Set<String>>{};
   final Map<String, Set<String>> removedPathToLocalIDs =
       <String, Set<String>>{};
   final List<LocalPathAsset> unsyncedAssets = [];
-  final observedLocalIDsByPath = {
-    for (final asset in onDeviceLocalPathAsset)
-      asset.pathID: Set<String>.of(asset.localIDs),
-  };
-
   for (final localPathAsset in onDeviceLocalPathAsset) {
     final String pathID = localPathAsset.pathID;
     final candidateLocalIDsForRemoval = Set<String>.of(
@@ -112,19 +103,6 @@ LocalDiffResult _getLocalAssetsDiff(Map<String, dynamic> args) {
     }
   }
 
-  for (final entry in explicitlyRemovedPathToLocalIDs.entries) {
-    final absentLocalIDs = entry.value.difference(
-      observedLocalIDsByPath[entry.key] ?? const {},
-    );
-    if (absentLocalIDs.isNotEmpty) {
-      removedPathToLocalIDs.update(
-        entry.key,
-        (existing) => {...existing, ...absentLocalIDs},
-        ifAbsent: () => absentLocalIDs,
-      );
-    }
-  }
-
   return LocalDiffResult(
     localPathAssets: unsyncedAssets,
     newPathToLocalIDs: newPathToLocalIDs,
@@ -136,12 +114,10 @@ LocalDiffResult getLocalAssetsDiffForTesting({
   required List<LocalPathAsset> assets,
   required Set<String> existingIDs,
   required Map<String, Set<String>> pathToLocalIDs,
-  Map<String, Set<String>> explicitlyRemovedPathToLocalIDs = const {},
 }) {
   return _getLocalAssetsDiff({
     'assets': assets,
     'existingIDs': existingIDs,
     'pathToLocalIDs': pathToLocalIDs,
-    'explicitlyRemovedPathToLocalIDs': explicitlyRemovedPathToLocalIDs,
   });
 }

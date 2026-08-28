@@ -4,11 +4,6 @@ import 'package:flutter/services.dart';
 
 enum DeviceFolderTransferOperation { copy, move }
 
-enum DeviceFolderTransferIdentityPolicy {
-  preserveSourceLocalID,
-  allowReplacementLocalID,
-}
-
 enum DeviceFolderTransferFailure {
   cancelled,
   missingSource,
@@ -22,7 +17,6 @@ class DeviceFolderTransferRequest {
   const DeviceFolderTransferRequest({
     required this.operation,
     required this.sourceFolderID,
-    required this.identityPolicy,
     required this.targetFolderID,
     required this.sourceLocalIDs,
     this.transferID,
@@ -31,16 +25,26 @@ class DeviceFolderTransferRequest {
 
   final DeviceFolderTransferOperation operation;
   final String sourceFolderID;
-  final DeviceFolderTransferIdentityPolicy identityPolicy;
   final String targetFolderID;
   final List<String> sourceLocalIDs;
   final String? transferID;
   final Map<String, Object>? recoveryContext;
 
+  DeviceFolderTransferRequest copyWith({
+    String? transferID,
+    Map<String, Object>? recoveryContext,
+  }) => DeviceFolderTransferRequest(
+    operation: operation,
+    sourceFolderID: sourceFolderID,
+    targetFolderID: targetFolderID,
+    sourceLocalIDs: sourceLocalIDs,
+    transferID: transferID ?? this.transferID,
+    recoveryContext: recoveryContext ?? this.recoveryContext,
+  );
+
   Map<String, Object> toChannelMap() => {
     'operation': operation.name,
     'sourceFolderID': sourceFolderID,
-    'identityPolicy': identityPolicy.name,
     'targetFolderID': targetFolderID,
     'sourceLocalIDs': sourceLocalIDs,
     'transferID': ?transferID,
@@ -50,14 +54,20 @@ class DeviceFolderTransferRequest {
 
 class DeviceFolderTransferResult {
   const DeviceFolderTransferResult({
-    required this.successLocalIDs,
-    required this.destinationLocalIDs,
+    required this.destinations,
     required this.failures,
+    this.requiresRecovery = false,
   });
 
-  final Set<String> successLocalIDs;
-  final Map<String, String> destinationLocalIDs;
+  final Map<String, DeviceFolderTransferDestination> destinations;
   final Map<String, DeviceFolderTransferFailure> failures;
+  final bool requiresRecovery;
+
+  Set<String> get successLocalIDs => destinations.keys.toSet();
+
+  Map<String, String> get destinationLocalIDs => {
+    for (final entry in destinations.entries) entry.key: entry.value.localID,
+  };
 
   bool get wasCancelled =>
       failures.isNotEmpty &&
@@ -66,15 +76,29 @@ class DeviceFolderTransferResult {
       );
 
   factory DeviceFolderTransferResult.fromChannelMap(Map<dynamic, dynamic> map) {
-    final successes = (map['successLocalIDs'] as List<dynamic>? ?? const [])
-        .whereType<String>()
-        .toSet();
-    final rawDestinationIDs =
+    final destinations = <String, DeviceFolderTransferDestination>{};
+    final rawDestinations =
+        map['destinations'] as Map<dynamic, dynamic>? ?? const {};
+    rawDestinations.forEach((sourceID, value) {
+      if (sourceID is String && value is Map<dynamic, dynamic>) {
+        final destination = DeviceFolderTransferDestination.fromChannelMap(
+          value,
+        );
+        if (destination != null) {
+          destinations[sourceID] = destination;
+        }
+      }
+    });
+    final legacyDestinationIDs =
         map['destinationLocalIDs'] as Map<dynamic, dynamic>? ?? const {};
-    final destinationLocalIDs = <String, String>{};
-    rawDestinationIDs.forEach((sourceID, destinationID) {
-      if (sourceID is String && destinationID is String) {
-        destinationLocalIDs[sourceID] = destinationID;
+    legacyDestinationIDs.forEach((sourceID, destinationID) {
+      if (sourceID is String &&
+          destinationID is String &&
+          !destinations.containsKey(sourceID)) {
+        destinations[sourceID] = DeviceFolderTransferDestination(
+          localID: destinationID,
+          displayName: null,
+        );
       }
     });
     final rawFailures = map['failures'] as Map<dynamic, dynamic>? ?? const {};
@@ -88,9 +112,33 @@ class DeviceFolderTransferResult {
       }
     });
     return DeviceFolderTransferResult(
-      successLocalIDs: successes,
-      destinationLocalIDs: destinationLocalIDs,
+      destinations: destinations,
       failures: failures,
+      requiresRecovery: map['requiresRecovery'] == true,
+    );
+  }
+}
+
+class DeviceFolderTransferDestination {
+  const DeviceFolderTransferDestination({
+    required this.localID,
+    required this.displayName,
+  });
+
+  final String localID;
+  final String? displayName;
+
+  static DeviceFolderTransferDestination? fromChannelMap(
+    Map<dynamic, dynamic> map,
+  ) {
+    final localID = map['localID'];
+    final displayName = map['displayName'];
+    if (localID is! String || (displayName != null && displayName is! String)) {
+      return null;
+    }
+    return DeviceFolderTransferDestination(
+      localID: localID,
+      displayName: displayName,
     );
   }
 }
@@ -102,6 +150,8 @@ class DeviceFolderTransferRecovery {
     required this.sourceFolderID,
     required this.targetFolderID,
     required this.sourceLocalIDs,
+    required this.sourceRecordIDs,
+    required this.cloudMoveSourceUploadedFileIDs,
     required this.ownerID,
     required this.cloudMoveCompleted,
     this.cloudMoveSourceCollectionID,
@@ -113,6 +163,8 @@ class DeviceFolderTransferRecovery {
   final String sourceFolderID;
   final String targetFolderID;
   final Set<String> sourceLocalIDs;
+  final Map<String, int> sourceRecordIDs;
+  final Map<String, List<int>> cloudMoveSourceUploadedFileIDs;
   final int ownerID;
   final bool cloudMoveCompleted;
   final int? cloudMoveSourceCollectionID;
@@ -134,6 +186,10 @@ class DeviceFolderTransferRecovery {
       sourceLocalIDs: (map['sourceLocalIDs'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .toSet(),
+      sourceRecordIDs: _intMap(map['sourceRecordIDs']),
+      cloudMoveSourceUploadedFileIDs: _intListMap(
+        map['cloudMoveSourceUploadedFileIDs'],
+      ),
       ownerID: map['ownerID'] as int,
       cloudMoveCompleted: map['cloudMoveCompleted'] == true,
       cloudMoveSourceCollectionID: (map['cloudMoveSourceCollectionID'] as num?)
@@ -143,6 +199,27 @@ class DeviceFolderTransferRecovery {
               .whereType<String>()
               .toSet(),
     );
+  }
+
+  static Map<String, int> _intMap(Object? value) {
+    final map = value as Map<dynamic, dynamic>? ?? const {};
+    return {
+      for (final entry in map.entries)
+        if (entry.key is String && entry.value is num)
+          entry.key as String: (entry.value as num).toInt(),
+    };
+  }
+
+  static Map<String, List<int>> _intListMap(Object? value) {
+    final map = value as Map<dynamic, dynamic>? ?? const {};
+    return {
+      for (final entry in map.entries)
+        if (entry.key is String && entry.value is List<dynamic>)
+          entry.key as String: <int>[
+            for (final value in entry.value)
+              if (value is num) value.toInt(),
+          ],
+    };
   }
 }
 
@@ -169,7 +246,6 @@ class DeviceFolderTransferClient {
   Future<Set<String>> eligibleDestinationIDs({
     required String sourceFolderID,
     required DeviceFolderTransferOperation operation,
-    required DeviceFolderTransferIdentityPolicy identityPolicy,
     required List<String> sourceLocalIDs,
     required List<String> candidateFolderIDs,
   }) async {
@@ -178,7 +254,6 @@ class DeviceFolderTransferClient {
       {
         'sourceFolderID': sourceFolderID,
         'operation': operation.name,
-        'identityPolicy': identityPolicy.name,
         'sourceLocalIDs': sourceLocalIDs,
         'candidateFolderIDs': candidateFolderIDs,
       },

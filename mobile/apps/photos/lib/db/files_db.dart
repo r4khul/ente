@@ -19,18 +19,6 @@ import "package:photos/models/metadata/common_keys.dart";
 import "package:photos/services/filter/db_filters.dart";
 import 'package:sqlite_async/sqlite_async.dart';
 
-class PendingDeviceFolderMove {
-  const PendingDeviceFolderMove({
-    required this.sourceCollectionID,
-    required this.destinationFolderName,
-    required this.localIDs,
-  });
-
-  final int sourceCollectionID;
-  final String destinationFolderName;
-  final Set<String> localIDs;
-}
-
 class FilesDB with SqlDbBase {
   /*
   Note: columnUploadedFileID and columnCollectionID have to be compared against
@@ -1339,30 +1327,89 @@ class FilesDB with SqlDbBase {
     );
   }
 
-  Future<void> reconcileUploadedDeviceFolderMove({
+  Future<void> reconcileDeviceFolderMove({
     required String sourcePathID,
     required String targetPathID,
-    required Map<String, String> destinationLocalIDs,
+    required String targetFolderName,
+    required Map<String, ({String localID, String? displayName})> destinations,
+    required Map<String, int> sourceRecordIDs,
+    required Map<String, List<int>> cloudMovedSourceUploadedFileIDs,
   }) async {
-    if (destinationLocalIDs.isEmpty) return;
+    if (destinations.isEmpty) return;
     final db = await sqliteAsyncDB;
     await db.writeTransaction((tx) async {
-      for (final entry in destinationLocalIDs.entries) {
-        final sourceLocalID = entry.key;
-        final destinationLocalID = entry.value;
-        await tx.execute(
-          'DELETE FROM $deviceFilesTable WHERE id = ? AND path_id = ?',
-          [sourceLocalID, sourcePathID],
+      final mappingDeletes = <List<Object?>>[];
+      final mappingInserts = <List<Object?>>[];
+      final fileUpdates = <List<Object?>>[];
+      final cloudFileUpdates = <List<Object?>>[];
+      for (final entry in destinations.entries) {
+        mappingDeletes.add([entry.key, sourcePathID]);
+        mappingInserts.add([entry.value.localID, targetPathID]);
+        final sourceRecordID = sourceRecordIDs[entry.key];
+        if (sourceRecordID != null) {
+          fileUpdates.add([
+            entry.value.localID,
+            entry.value.displayName,
+            entry.value.displayName,
+            targetFolderName,
+            sourceRecordID,
+            entry.key,
+            sourceRecordID,
+            entry.key,
+            sourceRecordID,
+            entry.key,
+            entry.key,
+          ]);
+        }
+        for (final uploadedFileID
+            in cloudMovedSourceUploadedFileIDs[entry.key] ?? const <int>[]) {
+          cloudFileUpdates.add([entry.value.localID, uploadedFileID]);
+        }
+      }
+      for (var start = 0; start < mappingDeletes.length; start += 400) {
+        final end = (start + 400).clamp(0, mappingDeletes.length);
+        await tx.executeBatch(
+          'DELETE FROM $deviceFilesTable WHERE id = ? AND path_id = ?;',
+          mappingDeletes.sublist(start, end),
         );
-        await tx.execute(
-          'INSERT OR IGNORE INTO $deviceFilesTable (id, path_id) VALUES (?, ?)',
-          [destinationLocalID, targetPathID],
+        await tx.executeBatch(
+          'INSERT OR IGNORE INTO $deviceFilesTable (id, path_id) VALUES (?, ?);',
+          mappingInserts.sublist(start, end),
         );
-        await tx.execute(
+      }
+      for (var start = 0; start < fileUpdates.length; start += 400) {
+        final end = (start + 400).clamp(0, fileUpdates.length);
+        await tx.executeBatch(
+          'UPDATE $filesTable SET '
+          '$columnLocalID = ?, '
+          '$columnTitle = CASE '
+          'WHEN ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1) '
+          'AND ? IS NOT NULL THEN ? ELSE $columnTitle END, '
+          '$columnCollectionID = CASE '
+          'WHEN $columnUploadedFileID IS NULL OR $columnUploadedFileID = -1 '
+          'THEN NULL ELSE $columnCollectionID END, '
+          '$columnDeviceFolder = CASE '
+          'WHEN $columnUploadedFileID IS NULL OR $columnUploadedFileID = -1 '
+          'THEN ? ELSE $columnDeviceFolder END '
+          'WHERE ($columnGeneratedID = ? AND $columnLocalID = ? '
+          'AND ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1)) '
+          'OR $columnUploadedFileID = (SELECT $columnUploadedFileID '
+          'FROM $filesTable WHERE $columnGeneratedID = ? '
+          'AND $columnLocalID = ? AND $columnUploadedFileID IS NOT NULL '
+          'AND $columnUploadedFileID != -1) '
+          'OR (COALESCE((SELECT $columnUploadedFileID FROM $filesTable '
+          'WHERE $columnGeneratedID = ? AND $columnLocalID = ?), -1) = -1 '
+          'AND $columnUploadedFileID IS NOT NULL '
+          'AND $columnUploadedFileID != -1 AND $columnLocalID = ?);',
+          fileUpdates.sublist(start, end),
+        );
+      }
+      for (var start = 0; start < cloudFileUpdates.length; start += 400) {
+        final end = (start + 400).clamp(0, cloudFileUpdates.length);
+        await tx.executeBatch(
           'UPDATE $filesTable SET $columnLocalID = ? '
-          'WHERE $columnLocalID = ? AND $columnUploadedFileID IS NOT NULL '
-          'AND $columnUploadedFileID != -1',
-          [destinationLocalID, sourceLocalID],
+          'WHERE $columnUploadedFileID = ?;',
+          cloudFileUpdates.sublist(start, end),
         );
       }
     });
@@ -1594,89 +1641,6 @@ class FilesDB with SqlDbBase {
       [collectionID],
     );
     return convertToFiles(results);
-  }
-
-  Future<void> reconcileRemovedDeviceFolderMappings({
-    required Map<String, Set<String>> mappingsToRemove,
-    required Map<String, Set<String>> pendingMappingsToRemove,
-    required Map<String, int> automaticBackupCollectionIDsByPath,
-    required List<PendingDeviceFolderMove> pendingMoves,
-  }) async {
-    if (mappingsToRemove.isEmpty) return;
-
-    final db = await instance.sqliteAsyncDB;
-    await db.writeTransaction((tx) async {
-      final mappingParameters = <List<Object?>>[];
-      for (final entry in mappingsToRemove.entries) {
-        for (final localID in entry.value) {
-          mappingParameters.add([localID, entry.key]);
-        }
-      }
-      const batchSize = 400;
-      for (
-        var start = 0;
-        start < mappingParameters.length;
-        start += batchSize
-      ) {
-        final end = (start + batchSize).clamp(0, mappingParameters.length);
-        await tx.executeBatch(
-          'DELETE FROM $deviceFilesTable WHERE id = ? AND path_id = ?;',
-          mappingParameters.sublist(start, end),
-        );
-      }
-
-      for (final move in pendingMoves) {
-        final localIDs = move.localIDs.toList();
-        for (var start = 0; start < localIDs.length; start += batchSize) {
-          final end = (start + batchSize).clamp(0, localIDs.length);
-          final batch = localIDs.sublist(start, end);
-          final placeholders = List.filled(batch.length, '?').join(',');
-          await tx.execute(
-            '''
-            UPDATE $filesTable
-            SET $columnCollectionID = NULL, $columnDeviceFolder = ?
-            WHERE $columnCollectionID = ?
-              AND $columnLocalID IN ($placeholders)
-              AND ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1)
-            ''',
-            [move.destinationFolderName, move.sourceCollectionID, ...batch],
-          );
-        }
-      }
-
-      for (final entry in automaticBackupCollectionIDsByPath.entries) {
-        final removedLocalIDs = pendingMappingsToRemove[entry.key];
-        if (removedLocalIDs == null || removedLocalIDs.isEmpty) continue;
-        await _clearPendingAutoBackupEntriesInTransaction(
-          tx,
-          collectionID: entry.value,
-          localIDs: removedLocalIDs,
-        );
-      }
-    });
-  }
-
-  Future<void> _clearPendingAutoBackupEntriesInTransaction(
-    SqliteWriteContext tx, {
-    required int collectionID,
-    required Set<String> localIDs,
-  }) async {
-    const batchSize = 400;
-    final ids = localIDs.toList();
-    for (var start = 0; start < ids.length; start += batchSize) {
-      final end = (start + batchSize).clamp(0, ids.length);
-      final batch = ids.sublist(start, end);
-      final placeholders = List.filled(batch.length, '?').join(',');
-      await tx.execute(
-        '''
-        DELETE FROM $filesTable
-        WHERE $columnCollectionID = ?
-          AND $columnLocalID IN ($placeholders)
-          AND ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1)
-        ''',
-        [collectionID, ...batch],
-      );
-    }
   }
 
   Future<Set<String>> getLocalIDsPresentInEntries(
