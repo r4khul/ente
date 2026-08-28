@@ -37,16 +37,31 @@ class DeviceFolderTransferResult {
   const DeviceFolderTransferResult({
     required this.destinations,
     required this.failures,
+    this.cloudMoveFailed = false,
+    this.localReconciliationFailed = false,
   });
 
   final Map<String, DeviceFolderTransferDestination> destinations;
   final Map<String, DeviceFolderTransferFailure> failures;
+  final bool cloudMoveFailed;
+  final bool localReconciliationFailed;
 
   Set<String> get successLocalIDs => destinations.keys.toSet();
 
   Map<String, String> get destinationLocalIDs => {
     for (final entry in destinations.entries) entry.key: entry.value.localID,
   };
+
+  DeviceFolderTransferResult copyWith({
+    bool? cloudMoveFailed,
+    bool? localReconciliationFailed,
+  }) => DeviceFolderTransferResult(
+    destinations: destinations,
+    failures: failures,
+    cloudMoveFailed: cloudMoveFailed ?? this.cloudMoveFailed,
+    localReconciliationFailed:
+        localReconciliationFailed ?? this.localReconciliationFailed,
+  );
 
   bool get wasCancelled =>
       failures.isNotEmpty &&

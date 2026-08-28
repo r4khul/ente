@@ -1,5 +1,6 @@
 import "dart:async";
 import "dart:io";
+import "package:collection/collection.dart";
 
 import "package:ente_icons/ente_icons.dart";
 import "package:ente_photos_platform/ente_photos_platform.dart";
@@ -779,13 +780,21 @@ class _FileSelectionActionsWidgetState
         ),
       );
       if (destination == null || !context.mounted) return;
+      // Reload the source folder from the database. DeviceFolderPage may hold
+      // a stale copy whose collectionID was only written to the DB after backup
+      // was enabled, which would otherwise hide the "Move in Ente" choice.
+      final effectiveSource =
+          (await FilesDB.instance.getDeviceCollections()).firstWhereOrNull(
+            (folder) => folder.id == source.id,
+          ) ??
+          source;
       final uploadedSourceLocalIDs = await FilesDB.instance.getUploadedLocalIDs(
         localIDs,
       );
-      final cloudMoveSourceLocalIDs = source.hasCollectionID()
+      final cloudMoveSourceLocalIDs = effectiveSource.hasCollectionID()
           ? await FilesDB.instance.getUploadedLocalIDs(
               localIDs,
-              collectionID: source.collectionID,
+              collectionID: effectiveSource.collectionID,
             )
           : const <String>{};
       if (!context.mounted) return;
@@ -802,14 +811,14 @@ class _FileSelectionActionsWidgetState
       }
       int? cloudMoveSourceCollectionID;
       if (operation == DeviceFolderTransferOperation.move &&
-          source.shouldBackup &&
+          effectiveSource.shouldBackup &&
           destination.shouldBackup &&
           cloudMoveSourceLocalIDs.isNotEmpty) {
         if (!mounted) return;
         final choice = await showBackedUpDeviceFolderMoveSheet(context);
         if (choice == null || !mounted) return;
         if (choice == BackedUpDeviceFolderMoveChoice.moveInEnte) {
-          cloudMoveSourceCollectionID = source.collectionID!;
+          cloudMoveSourceCollectionID = effectiveSource.collectionID!;
         }
       }
       if (!mounted) return;
@@ -832,12 +841,12 @@ class _FileSelectionActionsWidgetState
       late final DeviceFolderTransferResult result;
       try {
         result = await DeviceFolderTransferCoordinator.instance.transfer(
-          source: source,
+          source: effectiveSource,
           destination: destination,
           cloudMoveSourceCollectionID: cloudMoveSourceCollectionID,
           request: DeviceFolderTransferRequest(
             operation: operation,
-            sourceFolderID: source.id,
+            sourceFolderID: effectiveSource.id,
             targetFolderID: destination.id,
             sourceLocalIDs: localIDs,
           ),
@@ -853,7 +862,19 @@ class _FileSelectionActionsWidgetState
       }
       if (!mounted) return;
       final failures = result.failures.length;
-      if (failures == 0 && result.successLocalIDs.isNotEmpty) {
+      // cloudMoveFailed covers every uploaded item that was subject to the Ente
+      // move (the intersection of successfully device-moved and source-backed-up
+      // items), so count them all rather than a single placeholder.
+      final cloudMoveFailureCount = result.cloudMoveFailed
+          ? cloudMoveSourceLocalIDs.intersection(result.successLocalIDs).length
+          : 0;
+      final localReconciliationFailureCount = result.localReconciliationFailed
+          ? result.successLocalIDs.length
+          : 0;
+      if (failures == 0 &&
+          !result.cloudMoveFailed &&
+          !result.localReconciliationFailed &&
+          result.successLocalIDs.isNotEmpty) {
         widget.selectedFiles.clearAll();
         showShortToast(
           context,
@@ -877,7 +898,10 @@ class _FileSelectionActionsWidgetState
           context,
           context.strings.partiallyTransferredItems(
             completedCount: result.successLocalIDs.length,
-            failedCount: failures,
+            failedCount:
+                failures +
+                cloudMoveFailureCount +
+                localReconciliationFailureCount,
           ),
         );
       } else {
@@ -886,6 +910,8 @@ class _FileSelectionActionsWidgetState
       _logger.info(
         'Device folder transfer completed: operation=${operation.name}, '
         'success=${result.successLocalIDs.length}, failures=$failures, '
+        'cloudMoveFailed=${result.cloudMoveFailed}, '
+        'localReconciliationFailed=${result.localReconciliationFailed}, '
         'categories=${result.failures.values.map((value) => value.name).toSet()}',
       );
     } catch (error, stackTrace) {

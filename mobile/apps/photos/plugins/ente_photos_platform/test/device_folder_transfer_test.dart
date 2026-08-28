@@ -89,4 +89,40 @@ void main() {
 
     expect(result.wasCancelled, isTrue);
   });
+
+  test('keeps device success when only the cloud move fails', () {
+    const result = DeviceFolderTransferResult(
+      destinations: {
+        'source': DeviceFolderTransferDestination(
+          localID: 'destination',
+          displayName: 'file.jpg',
+        ),
+      },
+      failures: {},
+    );
+
+    final partial = result.copyWith(cloudMoveFailed: true);
+
+    expect(partial.successLocalIDs, {'source'});
+    expect(partial.failures, isEmpty);
+    expect(partial.cloudMoveFailed, isTrue);
+  });
+
+  test('keeps device success when local reconciliation fails', () {
+    const result = DeviceFolderTransferResult(
+      destinations: {
+        'source': DeviceFolderTransferDestination(
+          localID: 'destination',
+          displayName: 'file.jpg',
+        ),
+      },
+      failures: {},
+    );
+
+    final partial = result.copyWith(localReconciliationFailed: true);
+
+    expect(partial.successLocalIDs, {'source'});
+    expect(partial.failures, isEmpty);
+    expect(partial.localReconciliationFailed, isTrue);
+  });
 }

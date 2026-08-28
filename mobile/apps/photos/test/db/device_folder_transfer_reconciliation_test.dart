@@ -4,7 +4,9 @@ import "package:ente_photos_platform/ente_photos_platform.dart";
 import "package:flutter_test/flutter_test.dart";
 import "package:path_provider_platform_interface/path_provider_platform_interface.dart";
 import "package:photos/db/files_db.dart";
+import "package:photos/db/upload_locks_db.dart";
 import "package:photos/services/device_folder_transfer_coordinator.dart";
+import "package:sqflite_common_ffi/sqflite_ffi.dart";
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -13,6 +15,8 @@ void main() {
   late PathProviderPlatform previousPathProvider;
 
   setUpAll(() async {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
     previousPathProvider = PathProviderPlatform.instance;
     tempDir = await Directory.systemTemp.createTemp(
       "device_folder_transfer_reconciliation_test_",
@@ -20,11 +24,15 @@ void main() {
     PathProviderPlatform.instance = _FakePathProvider(tempDir.path);
   });
 
-  setUp(() => FilesDB.instance.clearTable());
+  setUp(() async {
+    await FilesDB.instance.clearTable();
+    await UploadLocksDB.instance.clearTable();
+  });
 
   tearDownAll(() async {
     final db = await FilesDB.instance.sqliteAsyncDB;
     await db.close();
+    await (await UploadLocksDB.instance.database).close();
     PathProviderPlatform.instance = previousPathProvider;
     await tempDir.delete(recursive: true);
   });
@@ -204,6 +212,42 @@ void main() {
     expect(await db.getAll("SELECT id, path_id FROM device_files"), [
       {"id": "99", "path_id": "destination"},
     ]);
+  });
+
+  test("waits for selected uploads before locking a device transfer", () async {
+    final locks = UploadLocksDB.instance;
+    const localID = "42";
+    await locks.tryAcquireLock(
+      localID,
+      "foreground",
+      DateTime.now().microsecondsSinceEpoch,
+    );
+
+    final transferLock = locks.acquireDeviceFolderTransferLocks([localID]);
+    expect(await locks.isDeviceFolderTransferLocked(localID), isFalse);
+
+    await locks.releaseLock(localID, "foreground");
+    await transferLock;
+
+    expect(await locks.isDeviceFolderTransferLocked(localID), isTrue);
+    expect(
+      await locks.tryAcquireLock(
+        localID,
+        "foreground",
+        DateTime.now().microsecondsSinceEpoch,
+      ),
+      isFalse,
+    );
+
+    await locks.releaseDeviceFolderTransferLocks([localID]);
+    expect(
+      await locks.tryAcquireLock(
+        localID,
+        "foreground",
+        DateTime.now().microsecondsSinceEpoch,
+      ),
+      isTrue,
+    );
   });
 }
 

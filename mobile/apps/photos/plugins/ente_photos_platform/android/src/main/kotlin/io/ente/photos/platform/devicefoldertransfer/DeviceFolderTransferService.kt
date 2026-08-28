@@ -62,13 +62,23 @@ internal class DeviceFolderTransferService(private val context: Context) {
                     return@forEach
                 }
                 destinations[localID] = if (operation == "copy") {
-                    copy(source, target, plan.anchor, targetNames)
+                    val copied = copy(source, target, plan.anchor, targetNames)
+                    if (!copied.canRemoveSource) {
+                        runCatching { context.contentResolver.delete(copiedUri(copied, source, target), null, null) }
+                        throw IOException("Could not verify copied source before completing copy")
+                    }
+                    copied.destination
                 } else if (plan.requiresCopy) {
                     val copied = copy(source, target, plan.anchor, targetNames)
+                    if (!copied.canRemoveSource) {
+                        runCatching { context.contentResolver.delete(copiedUri(copied, source, target), null, null) }
+                        throw IOException("Could not verify copied source before removing it")
+                    }
                     if (context.contentResolver.delete(source.uri, null, null) != 1) {
+                        runCatching { context.contentResolver.delete(copiedUri(copied, source, target), null, null) }
                         throw IOException("Could not remove source after copying")
                     }
-                    copied
+                    copied.destination
                 } else {
                     relocate(source, target, targetNames)
                 }
@@ -88,6 +98,12 @@ internal class DeviceFolderTransferService(private val context: Context) {
         destinations: Map<String, Map<String, String>>,
         failures: Map<String, String>,
     ): Map<String, Any> = mapOf("destinations" to destinations, "failures" to failures)
+
+    private fun copiedUri(copied: CopyResult, source: MediaItem, target: Destination): Uri =
+        ContentUris.withAppendedId(
+            destinationCollection(source.mediaType, target.volumeName),
+            copied.destination["localID"]!!.toLong(),
+        )
 
     private fun mediaItem(localID: String): MediaItem? {
         val id = localID.toLongOrNull() ?: return null
@@ -149,7 +165,7 @@ internal class DeviceFolderTransferService(private val context: Context) {
         target: Destination,
         anchor: Uri?,
         targetNames: MutableSet<String>,
-    ): Map<String, String> {
+    ): CopyResult {
         val resolver = context.contentResolver
         val name = availableDisplayName(targetNames, source.displayName)
         val destination = resolver.insert(
@@ -168,7 +184,8 @@ internal class DeviceFolderTransferService(private val context: Context) {
                 resolver.openOutputStream(destination)?.use { output -> input.copyTo(output) }
                     ?: throw IOException("Could not open destination")
             } ?: throw IOException("Could not open source")
-            if (source.size != null && copied != source.size) {
+            val canRemoveSource = source.size == null || copied == source.size
+            if (!canRemoveSource) {
                 Log.w(TAG, "Copied byte count differs from MediaStore size for ${source.uri}")
             }
             if (resolver.update(destination, ContentValues().apply {
@@ -177,11 +194,14 @@ internal class DeviceFolderTransferService(private val context: Context) {
                 throw IOException("Could not publish destination")
             }
             targetNames.add(name)
+            return CopyResult(
+                mapOf("localID" to ContentUris.parseId(destination).toString(), "displayName" to name),
+                canRemoveSource,
+            )
         } catch (error: Exception) {
             runCatching { resolver.delete(destination, null, null) }
             throw error
         }
-        return mapOf("localID" to ContentUris.parseId(destination).toString(), "displayName" to name)
     }
 
     private fun relocate(
@@ -277,6 +297,7 @@ internal class DeviceFolderTransferService(private val context: Context) {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && (operation == "copy" || operation == "move")
 
     private data class Destination(val bucketID: String, val relativePath: String, val volumeName: String)
+    private data class CopyResult(val destination: Map<String, String>, val canRemoveSource: Boolean)
     private data class Plan(val anchor: Uri?, val requiresCopy: Boolean)
     private data class MediaItem(
         val uri: Uri,

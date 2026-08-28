@@ -102,6 +102,10 @@ class FileUploader {
       currentTime - kSafeBufferForLockExpiry,
     );
     if (!isBackground) {
+      await _uploadLocks.releaseLocksAcquiredByOwnerBefore(
+        UploadLocksDB.deviceFolderTransferLockOwner,
+        currentTime,
+      );
       final isBGTaskDead = !await isBackgroundEngineActive();
       if (isBGTaskDead) {
         await _uploadLocks.releaseLocksAcquiredByOwnerBefore(
@@ -385,23 +389,12 @@ class FileUploader {
     final String lockKey = file.localID!;
     bool isMultipartUpload = false;
 
-    late final bool acquiredLock;
-    try {
-      acquiredLock = await _uploadLocks.tryAcquireLock(
-        lockKey,
-        _processType.toString(),
-        DateTime.now().microsecondsSinceEpoch,
-      );
-    } catch (e, s) {
-      _logger.severe(
-        "Upload lock database failure for ${file.tag}: "
-        "targetCollectionID=$collectionID, requestOwner=$_processType, "
-        "forcedUpload=$forcedUpload",
-        e,
-        s,
-      );
-      rethrow;
-    }
+    final acquiredLock = await _tryAcquireUploadLock(
+      lockKey,
+      file: file,
+      collectionID: collectionID,
+      forcedUpload: forcedUpload,
+    );
     if (!acquiredLock) {
       final lockInfo = await _uploadLocks.getLockData(lockKey);
       _logger.warning(
@@ -806,6 +799,41 @@ class FileUploader {
         lockKey: lockKey,
         isMultiPartUpload: isMultipartUpload,
       );
+    }
+  }
+
+  Future<bool> _tryAcquireUploadLock(
+    String lockKey, {
+    required EnteFile file,
+    required int collectionID,
+    required bool forcedUpload,
+  }) async {
+    try {
+      final acquiredLock = await _uploadLocks.tryAcquireLock(
+        lockKey,
+        _processType.toString(),
+        DateTime.now().microsecondsSinceEpoch,
+      );
+      if (acquiredLock ||
+          !await _uploadLocks.isDeviceFolderTransferLocked(lockKey)) {
+        return acquiredLock;
+      }
+      await _uploadLocks.waitForDeviceFolderTransferLock(lockKey);
+      return _tryAcquireUploadLock(
+        lockKey,
+        file: file,
+        collectionID: collectionID,
+        forcedUpload: forcedUpload,
+      );
+    } catch (e, s) {
+      _logger.severe(
+        "Upload lock database failure for ${file.tag}: "
+        "targetCollectionID=$collectionID, requestOwner=$_processType, "
+        "forcedUpload=$forcedUpload",
+        e,
+        s,
+      );
+      rethrow;
     }
   }
 

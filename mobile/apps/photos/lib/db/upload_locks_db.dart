@@ -11,6 +11,10 @@ import "package:sqflite_migration/sqflite_migration.dart";
 
 class UploadLocksDB {
   static const _databaseName = "ente.upload_locks.db";
+  static const deviceFolderTransferLockOwner = "device-folder-transfer";
+  static const _deviceFolderTransferLockPollInterval = Duration(
+    milliseconds: 50,
+  );
 
   static const _uploadLocksTable = (
     table: "upload_locks",
@@ -253,6 +257,51 @@ class UploadLocksDB {
       where: '${_uploadLocksTable.columnTime} < ?',
       whereArgs: [time],
     );
+  }
+
+  Future<void> acquireDeviceFolderTransferLocks(
+    Iterable<String> localIDs,
+  ) async {
+    final ids = localIDs.toSet();
+    if (ids.isEmpty) return;
+
+    while (true) {
+      final acquiredIDs = <String>[];
+      final acquiredAt = DateTime.now().microsecondsSinceEpoch;
+      for (final localID in ids) {
+        final didAcquire = await tryAcquireLock(
+          localID,
+          deviceFolderTransferLockOwner,
+          acquiredAt,
+        );
+        if (!didAcquire) break;
+        acquiredIDs.add(localID);
+      }
+      if (acquiredIDs.length == ids.length) return;
+
+      await Future.wait(
+        acquiredIDs.map(
+          (localID) => releaseLock(localID, deviceFolderTransferLockOwner),
+        ),
+      );
+      await Future<void>.delayed(_deviceFolderTransferLockPollInterval);
+    }
+  }
+
+  Future<void> releaseDeviceFolderTransferLocks(Iterable<String> localIDs) =>
+      Future.wait(
+        localIDs.toSet().map(
+          (localID) => releaseLock(localID, deviceFolderTransferLockOwner),
+        ),
+      );
+
+  Future<bool> isDeviceFolderTransferLocked(String localID) =>
+      isLocked(localID, deviceFolderTransferLockOwner);
+
+  Future<void> waitForDeviceFolderTransferLock(String localID) async {
+    while (await isDeviceFolderTransferLocked(localID)) {
+      await Future<void>.delayed(_deviceFolderTransferLockPollInterval);
+    }
   }
 
   Future<({String encryptedFileKey, String fileNonce, String keyNonce})>

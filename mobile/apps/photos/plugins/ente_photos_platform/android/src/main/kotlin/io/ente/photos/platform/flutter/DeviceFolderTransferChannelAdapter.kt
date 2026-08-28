@@ -29,9 +29,12 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
     private var isTransferInProgress = false
     @Volatile
     private var isDetached = false
+    @Volatile
+    private var attachmentGeneration = 0
 
     fun attach(binding: FlutterPlugin.FlutterPluginBinding) {
         isDetached = false
+        attachmentGeneration++
         if (transferExecutor.isShutdown) transferExecutor = Executors.newSingleThreadExecutor()
         service = DeviceFolderTransferService(binding.applicationContext)
     }
@@ -63,6 +66,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                 val operation = arguments["operation"] as? String
                 val ids = arguments["candidateFolderIDs"] as? List<*> ?: emptyList<Any>()
                 val sourceLocalIDs = arguments["sourceLocalIDs"] as? List<*> ?: emptyList<Any>()
+                val generation = attachmentGeneration
                 transferExecutor.execute {
                     try {
                         val eligibleIDs = service.eligibleDestinationIDs(
@@ -71,9 +75,9 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                             ids.filterIsInstance<String>(),
                             sourceLocalIDs.filterIsInstance<String>(),
                         )
-                        postToMain { result.success(eligibleIDs) }
+                        postToMain(generation) { result.success(eligibleIDs) }
                     } catch (error: Exception) {
-                        postToMain {
+                        postToMain(generation) {
                             result.error(
                                 "device_folder_transfer_failed",
                                 error.message,
@@ -107,7 +111,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
     fun detach() {
         detachActivity(cancelPendingConsent = true)
         isDetached = true
-        mainHandler.removeCallbacksAndMessages(null)
+        attachmentGeneration++
         transferExecutor.shutdown()
     }
 
@@ -135,11 +139,12 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
             )
             return
         }
+        val generation = attachmentGeneration
         pendingConsentBatches = ArrayDeque()
         transferExecutor.execute {
             try {
                 val uris = ids.mapNotNull(service::mediaUri)
-                postToMain {
+                postToMain(generation) {
                     if (pendingResult !== result) return@postToMain
                     if (uris.isEmpty()) {
                         clearPendingConsent()
@@ -165,7 +170,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                     startPendingConsentRequest()
                 }
             } catch (error: Exception) {
-                postToMain {
+                postToMain(generation) {
                     completeWithError(error)
                 }
             }
@@ -263,6 +268,7 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         ids: List<String>,
         result: MethodChannel.Result,
     ) {
+        val generation = attachmentGeneration
         transferExecutor.execute {
             try {
                 val transferResult = service.transfer(
@@ -271,23 +277,31 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
                     target,
                     ids,
                 )
-                postToMain {
-                    if (pendingResult !== result) return@postToMain
-                    clearPending()
-                    isTransferInProgress = false
-                    result.success(transferResult)
-                }
+                finishTransfer(result, generation) { it.success(transferResult) }
             } catch (error: Exception) {
-                postToMain {
-                    if (pendingResult === result) completeWithError(error)
+                finishTransfer(result, generation) {
+                    it.error("device_folder_transfer_failed", error.message, null)
                 }
             }
         }
     }
 
-    private fun postToMain(action: () -> Unit) {
+    private fun finishTransfer(
+        result: MethodChannel.Result,
+        generation: Int,
+        completion: (MethodChannel.Result) -> Unit,
+    ) {
         mainHandler.post {
-            if (!isDetached) action()
+            if (pendingResult !== result) return@post
+            clearPending()
+            isTransferInProgress = false
+            if (!isDetached && generation == attachmentGeneration) completion(result)
+        }
+    }
+
+    private fun postToMain(generation: Int = attachmentGeneration, action: () -> Unit) {
+        mainHandler.post {
+            if (!isDetached && generation == attachmentGeneration) action()
         }
     }
 
