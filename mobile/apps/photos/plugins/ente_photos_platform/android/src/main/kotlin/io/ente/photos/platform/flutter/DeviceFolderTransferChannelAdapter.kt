@@ -47,7 +47,9 @@ internal class DeviceFolderTransferChannelAdapter : MethodChannel.MethodCallHand
         activityBinding?.removeActivityResultListener(this)
         activityBinding = null
         activity = null
-        if (cancelPendingConsent) completeWithFailures("cancelled")
+        if (cancelPendingConsent && isConsentRequestInProgress) {
+            completeWithFailures("cancelled")
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {

@@ -424,6 +424,28 @@ class FilesDB with SqlDbBase {
         CREATE INDEX IF NOT EXISTS auto_backup_path_id_index
         ON $filesTable($columnAutoBackupPathID);
       ''',
+      '''
+        UPDATE $filesTable
+        SET $columnAutoBackupPathID = (
+          SELECT df.path_id
+          FROM $deviceFilesTable AS df
+          INNER JOIN device_collections AS dc ON dc.id = df.path_id
+          WHERE df.id = $filesTable.$columnLocalID
+            AND dc.should_backup = 1
+            AND dc.collection_id = $filesTable.$columnCollectionID
+          LIMIT 1
+        )
+        WHERE $columnAutoBackupPathID IS NULL
+          AND ($columnUploadedFileID IS NULL OR $columnUploadedFileID = -1)
+          AND EXISTS (
+            SELECT 1
+            FROM $deviceFilesTable AS df
+            INNER JOIN device_collections AS dc ON dc.id = df.path_id
+            WHERE df.id = $filesTable.$columnLocalID
+              AND dc.should_backup = 1
+              AND dc.collection_id = $filesTable.$columnCollectionID
+          );
+      ''',
     ];
   }
 

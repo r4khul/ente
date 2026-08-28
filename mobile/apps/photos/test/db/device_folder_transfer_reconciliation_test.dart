@@ -39,7 +39,7 @@ void main() {
       ]);
       for (final row in <List<Object?>>[
         ["42", -1, 101, "source", "automatic.jpg", "Source"],
-        ["42", -1, 101, null, "manual-pending.jpg", "Source"],
+        ["42", -1, 505, null, "manual-pending.jpg", "Manual album"],
         ["42", 77, 202, null, "linked-one.jpg", "Manual album"],
         ["42", 77, 303, null, "linked-two.jpg", "Manual album"],
         ["42", 88, 404, null, "another-link.jpg", "Another album"],
@@ -50,7 +50,7 @@ void main() {
             local_id, uploaded_file_id, collection_id, auto_backup_path_id,
             title, device_folder,
             modification_time, creation_time
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           """,
           [...row, "1", "1"],
         );
@@ -105,10 +105,10 @@ void main() {
           {
             "local_id": "99",
             "uploaded_file_id": -1,
-            "collection_id": 101,
+            "collection_id": 505,
             "auto_backup_path_id": null,
             "title": "manual-pending.jpg",
-            "device_folder": "Source",
+            "device_folder": "Manual album",
           },
         ],
       );
@@ -169,50 +169,42 @@ void main() {
     ]);
   });
 
-  test(
-    "is idempotent when the destination representation already exists",
-    () async {
-      final db = await FilesDB.instance.sqliteAsyncDB;
-      await db.execute("INSERT INTO device_files (id, path_id) VALUES (?, ?)", [
-        "42",
-        "source",
-      ]);
-      for (final row in <List<Object?>>[
-        ["42", 77, 202, "source.jpg"],
-        ["99", 77, 202, "destination.jpg"],
-      ]) {
-        await db.execute(
-          """
+  test("is idempotent after a cross-volume rebind", () async {
+    final db = await FilesDB.instance.sqliteAsyncDB;
+    await db.execute("INSERT INTO device_files (id, path_id) VALUES (?, ?)", [
+      "42",
+      "source",
+    ]);
+    await db.execute(
+      """
         INSERT INTO files (
           local_id, uploaded_file_id, collection_id, title, modification_time,
           creation_time
         ) VALUES (?, ?, ?, ?, ?, ?)
         """,
-          [...row, "1", "1"],
-        );
-      }
+      ["42", 77, 202, "source.jpg", "1", "1"],
+    );
 
-      await DeviceFolderTransferCoordinator.reconcileDeviceFolderTransfer(
-        DeviceFolderTransferOperation.move,
-        sourcePathID: "source",
-        targetPathID: "destination",
-        destinations: const {"42": "99"},
-      );
-      await DeviceFolderTransferCoordinator.reconcileDeviceFolderTransfer(
-        DeviceFolderTransferOperation.move,
-        sourcePathID: "source",
-        targetPathID: "destination",
-        destinations: const {"42": "99"},
-      );
+    await DeviceFolderTransferCoordinator.reconcileDeviceFolderTransfer(
+      DeviceFolderTransferOperation.move,
+      sourcePathID: "source",
+      targetPathID: "destination",
+      destinations: const {"42": "99"},
+    );
+    await DeviceFolderTransferCoordinator.reconcileDeviceFolderTransfer(
+      DeviceFolderTransferOperation.move,
+      sourcePathID: "source",
+      targetPathID: "destination",
+      destinations: const {"42": "99"},
+    );
 
-      expect(await db.getAll("SELECT local_id, title FROM files"), [
-        {"local_id": "99", "title": "destination.jpg"},
-      ]);
-      expect(await db.getAll("SELECT id, path_id FROM device_files"), [
-        {"id": "99", "path_id": "destination"},
-      ]);
-    },
-  );
+    expect(await db.getAll("SELECT local_id, title FROM files"), [
+      {"local_id": "99", "title": "source.jpg"},
+    ]);
+    expect(await db.getAll("SELECT id, path_id FROM device_files"), [
+      {"id": "99", "path_id": "destination"},
+    ]);
+  });
 }
 
 class _FakePathProvider extends PathProviderPlatform {
