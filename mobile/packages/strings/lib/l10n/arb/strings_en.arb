@@ -101,6 +101,28 @@
     }
   },
   "addedSuccessfullyTo": "Added successfully to  {albumName}",
+  "copiedItemsTo": "{count, plural, one{Copied {count} item to {albumName}} other{Copied {count} items to {albumName}}}",
+  "@copiedItemsTo": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "albumName": {
+        "type": "String"
+      }
+    }
+  },
+  "copyingItemsTo": "{count, plural, one{Copying {count} item to {albumName}} other{Copying {count} items to {albumName}}}",
+  "@copyingItemsTo": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "albumName": {
+        "type": "String"
+      }
+    }
+  },
   "@addedSuccessfullyTo": {
     "placeholders": {
       "albumName": {}
@@ -815,12 +837,24 @@
   "copiedNextToClipboard": "Copied next code to clipboard",
   "copiedToClipboard": "Copied to clipboard",
   "copyAllToClipboard": "Copy all to clipboard",
+  "copyAnyway": "Copy anyway",
+  "copyAlreadyBackedUpFilesWarning": "{count, plural, one{This item is already backed up. The copy will be backed up too.} other{These {count} items are already backed up. Their copies will be backed up too.}}",
+  "@copyAlreadyBackedUpFilesWarning": {
+    "description": "Warning shown before copying already backed-up items into an automatically backed-up device folder",
+    "placeholders": {
+      "count": {
+        "type": "int",
+        "example": "2"
+      }
+    }
+  },
   "copyEmailAddress": "Copy email address",
   "@copyEmailAddress": {
     "description": "Button to copy email address to clipboard"
   },
   "copyEmbedHtml": "Copy embed HTML",
   "copyLink": "Copy link",
+  "copyToAlbum": "Copy to album",
   "copypasteThisCodentoYourAuthenticatorApp": "Copy-paste this code\nto your authenticator app",
   "couldNotBackUpTryLater": "We could not backup your data.\nWe will retry later.",
   "couldNotFreeUpSpace": "Could not free up space",
@@ -864,6 +898,7 @@
   "createAnEnteAccount": "Create an Ente account",
   "createAnotherKit": "Create another kit",
   "createBackupNow": "Create backup now",
+  "createDuplicateBackupsQuestion": "Create duplicate backups?",
   "createCollaborativeLink": "Create collaborative link",
   "createCollage": "Create collage",
   "createCollection": "Create collection",
@@ -2582,6 +2617,28 @@
   "mostRelevant": "Most relevant",
   "mountains": "Over the hills",
   "movedSuccessfullyTo": "Moved successfully to {albumName}",
+  "movedItemsTo": "{count, plural, one{Moved {count} item to {albumName}} other{Moved {count} items to {albumName}}}",
+  "@movedItemsTo": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "albumName": {
+        "type": "String"
+      }
+    }
+  },
+  "movingItemsTo": "{count, plural, one{Moving {count} item to {albumName}} other{Moving {count} items to {albumName}}}",
+  "@movingItemsTo": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "albumName": {
+        "type": "String"
+      }
+    }
+  },
   "@movedSuccessfullyTo": {
     "placeholders": {
       "albumName": {}
@@ -2603,6 +2660,10 @@
   },
   "moveSelectedPhotosToOneDate": "Move selected photos to one date",
   "moveToAlbum": "Move to album",
+  "moveBackedUpFilesQuestion": "Move these items in Ente too?",
+  "moveBackedUpFilesDescription": "You moved these items to a new folder on your device. Move them in Ente too to keep your folders in sync.",
+  "moveInEnte": "Move in Ente too",
+  "moveOnDeviceOnly": "Keep on device only",
   "moveToHiddenAlbum": "Move to hidden album",
   "movingFilesToAlbum": "Moving files to album...",
   "name": "Name",
@@ -2901,6 +2962,18 @@
       "providerName": {
         "example": "AppStore|PlayStore",
         "type": "String"
+      }
+    }
+  },
+  "partiallyTransferredItems": "{completedCount, plural, one{Transferred {completedCount} item} other{Transferred {completedCount} items}}; {failedCount} failed.",
+  "@partiallyTransferredItems": {
+    "description": "Shown after a device-folder copy or move when some items completed and some did not.",
+    "placeholders": {
+      "completedCount": {
+        "type": "int"
+      },
+      "failedCount": {
+        "type": "int"
       }
     }
   },

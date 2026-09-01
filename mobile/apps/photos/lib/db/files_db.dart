@@ -2,6 +2,7 @@ import "dart:async";
 import "dart:io";
 import "dart:math";
 
+import "package:collection/collection.dart";
 import "package:computer/computer.dart";
 import "package:ente_pure_utils/ente_pure_utils.dart";
 import 'package:flutter/foundation.dart';
@@ -35,6 +36,7 @@ class FilesDB with SqlDbBase {
 
   static const filesTable = 'files';
   static const tempTable = 'temp_files';
+  static const deviceFilesTable = 'device_files';
 
   static const columnGeneratedID = '_id';
   static const columnUploadedFileID = 'uploaded_file_id';
@@ -62,7 +64,6 @@ class FilesDB with SqlDbBase {
   static const columnThumbnailDecryptionHeader = 'thumbnail_decryption_header';
   static const columnMetadataDecryptionHeader = 'metadata_decryption_header';
   static const columnFileSize = 'file_size';
-
   // MMD is magic metadata.
   static const columnMMdEncodedJson = 'mmd_encoded_json';
   static const columnMMdVersion = 'mmd_ver';
@@ -333,7 +334,7 @@ class FilesDB with SqlDbBase {
   static List<String> createOnDeviceFilesAndPathCollection() {
     return [
       '''
-        CREATE TABLE IF NOT EXISTS device_files (
+        CREATE TABLE IF NOT EXISTS $deviceFilesTable (
           id TEXT NOT NULL,
           path_id TEXT NOT NULL,
           UNIQUE(id, path_id)
@@ -352,10 +353,10 @@ class FilesDB with SqlDbBase {
       );
       ''',
       '''
-      CREATE INDEX IF NOT EXISTS df_id_idx ON device_files (id);
+      CREATE INDEX IF NOT EXISTS df_id_idx ON $deviceFilesTable (id);
       ''',
       '''
-      CREATE INDEX IF NOT EXISTS df_path_id_idx ON device_files (path_id);
+      CREATE INDEX IF NOT EXISTS df_path_id_idx ON $deviceFilesTable (path_id);
       ''',
     ];
   }
@@ -1319,6 +1320,56 @@ class FilesDB with SqlDbBase {
       ' AND $columnLocalID IS NULL',
       [localID, uploadedID],
     );
+  }
+
+  Future<List<EnteFile>> getUploadedFilesForLocalIDs(
+    Iterable<String> localIDs, {
+    int? collectionID,
+  }) async {
+    final ids = localIDs.toSet().toList(growable: false);
+    if (ids.isEmpty) return const [];
+    final db = await sqliteAsyncDB;
+    final rows = <Map<String, Object?>>[];
+    for (final batch in ids.slices(900)) {
+      final placeholders = List.filled(batch.length, '?').join(',');
+      final collectionClause = collectionID == null
+          ? ''
+          : ' AND $columnCollectionID = ?';
+      rows.addAll(
+        await db.getAll(
+          'SELECT * FROM $filesTable WHERE $columnLocalID IN ($placeholders) '
+          'AND $columnUploadedFileID IS NOT NULL AND $columnUploadedFileID != -1'
+          '$collectionClause',
+          collectionID == null ? batch : [...batch, collectionID],
+        ),
+      );
+    }
+    return convertToFiles(rows);
+  }
+
+  Future<Set<String>> getUploadedLocalIDs(
+    Iterable<String> localIDs, {
+    int? collectionID,
+  }) async {
+    final ids = localIDs.toSet().toList(growable: false);
+    if (ids.isEmpty) return const {};
+    final db = await sqliteAsyncDB;
+    final uploaded = <String>{};
+    for (final batch in ids.slices(900)) {
+      final placeholders = List.filled(batch.length, '?').join(',');
+      final collectionClause = collectionID == null
+          ? ''
+          : ' AND $columnCollectionID = ?';
+      final rows = await db.getAll(
+        'SELECT DISTINCT $columnLocalID FROM $filesTable '
+        'WHERE $columnLocalID IN ($placeholders) '
+        'AND $columnUploadedFileID IS NOT NULL AND $columnUploadedFileID != -1'
+        '$collectionClause',
+        collectionID == null ? batch : [...batch, collectionID],
+      );
+      uploaded.addAll(rows.map((row) => row[columnLocalID] as String));
+    }
+    return uploaded;
   }
 
   Future<void> deleteByGeneratedID(int genID) async {
