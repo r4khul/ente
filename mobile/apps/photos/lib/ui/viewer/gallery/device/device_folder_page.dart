@@ -14,7 +14,10 @@ import "package:photos/models/file_load_result.dart";
 import "package:photos/models/gallery_type.dart";
 import "package:photos/models/selected_files.dart";
 import "package:photos/service_locator.dart";
+import "package:photos/services/device_folder_move_in_ente_suggestion.dart";
 import "package:photos/services/sync/remote_sync_service.dart";
+import "package:photos/ui/collections/device/device_folder_action_sheet.dart";
+import "package:photos/ui/notification/toast.dart";
 import "package:photos/ui/viewer/actions/file_selection_overlay_bar.dart";
 import "package:photos/ui/viewer/gallery/device/backup_header_widget.dart";
 import "package:photos/ui/viewer/gallery/device/skipped_device_folder_page.dart";
@@ -23,6 +26,7 @@ import "package:photos/ui/viewer/gallery/gallery_app_bar_widget.dart";
 import "package:photos/ui/viewer/gallery/state/gallery_boundaries_provider.dart";
 import "package:photos/ui/viewer/gallery/state/gallery_files_inherited_widget.dart";
 import "package:photos/ui/viewer/gallery/state/selection_state.dart";
+import "package:photos/utils/dialog_util.dart";
 
 class DeviceFolderPage extends StatefulWidget {
   final DeviceCollection deviceCollection;
@@ -42,6 +46,68 @@ class _DeviceFolderPageState extends State<DeviceFolderPage> {
   void initState() {
     super.initState();
     _shouldBackup = widget.deviceCollection.shouldBackup;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _offerMoveInEnteSuggestion();
+    });
+  }
+
+  Future<void> _offerMoveInEnteSuggestion() async {
+    try {
+      final candidate = await DeviceFolderMoveInEnteSuggestion.instance
+          .loadForDestination(widget.deviceCollection);
+      if (candidate == null || !mounted) return;
+      final moveInEnte = await showMoveInEnteSuggestionSheet(
+        context,
+        previewFiles: candidate.previewFiles,
+        itemCount: candidate.localIDs.length,
+      );
+      if (!mounted) return;
+      if (moveInEnte == null) return;
+      if (!moveInEnte) {
+        await DeviceFolderMoveInEnteSuggestion.instance.discard(candidate.id);
+        return;
+      }
+      final dialog = createProgressDialog(
+        context,
+        context.strings.movingItemsTo(
+          count: candidate.localIDs.length,
+          albumName: candidate.destination.name,
+        ),
+      );
+      await dialog.show();
+      try {
+        await DeviceFolderMoveInEnteSuggestion.instance.moveInEnte(candidate);
+        if (mounted) {
+          showShortToast(
+            context,
+            context.strings.movedItemsTo(
+              count: candidate.localIDs.length,
+              albumName: candidate.destination.name,
+            ),
+          );
+        }
+      } catch (error, stackTrace) {
+        _logger.warning(
+          'Could not move device-folder files in Ente',
+          error,
+          stackTrace,
+        );
+        if (mounted) {
+          showShortToast(
+            context,
+            context.strings.somethingWentWrongPleaseTryAgain,
+          );
+        }
+      } finally {
+        await dialog.hide();
+      }
+    } catch (error, stackTrace) {
+      _logger.warning(
+        'Could not load a device-folder Ente move suggestion',
+        error,
+        stackTrace,
+      );
+    }
   }
 
   Future<FileLoadResult> _loadFiles(
@@ -110,6 +176,9 @@ class _DeviceFolderPageState extends State<DeviceFolderPage> {
                 FileSelectionOverlayBar(
                   GalleryType.localFolder,
                   _selectedFiles,
+                  deviceCollection: widget.deviceCollection.copyWith(
+                    shouldBackup: _shouldBackup,
+                  ),
                 ),
               ],
             ),
