@@ -31,6 +31,7 @@ void preloadFile(EnteFile file) {
 // https://github.com/CaiJingLong/flutter_photo_manager#cache-problem-of-ios
 Future<File?> getFile(
   EnteFile file, {
+  ProgressCallback? progressCallback,
   bool liveVideo = false,
   bool isOrigin = false,
   bool forGalleryDownload = false, // only relevant for live photos
@@ -40,6 +41,7 @@ Future<File?> getFile(
     if (file.isRemoteOnlyFile) {
       return await getFileFromServer(
         file,
+        progressCallback: progressCallback,
         liveVideo: liveVideo,
         forGalleryDownload: forGalleryDownload,
         throwOnDecryptionFailure: throwOnDecryptionFailure,
@@ -115,7 +117,7 @@ String getSharedMediaPathFromLocalID(String localID) {
 
 final Map<String, Future<File?>> _fileDownloadsInProgress =
     <String, Future<File?>>{};
-final Map<String, ProgressCallback?> _progressCallbacks = {};
+final Map<String, Set<ProgressCallback>> _progressCallbacks = {};
 
 Future<T> _runOncePerKey<K, T>(
   Map<K, Future<T>> inProgress,
@@ -146,15 +148,39 @@ Future<T> _runOncePerKey<K, T>(
   return download;
 }
 
-void removeDownloadCallback(EnteFile file) {
+void removeDownloadCallback(EnteFile file, ProgressCallback progressCallback) {
   if (!file.isUploaded) {
     return;
   }
-  String id = file.uploadedFileID.toString() + false.toString();
-  _progressCallbacks.remove(id);
-  if (file.isLivePhoto) {
-    id = file.uploadedFileID.toString() + true.toString();
-    _progressCallbacks.remove(id);
+  _removeProgressCallback(_progressCallbackID(file, false), progressCallback);
+}
+
+String _progressCallbackID(EnteFile file, bool liveVideo) {
+  final id = file.uploadedFileID.toString();
+  return file.isLivePhoto ? '${id}livePhoto' : id + liveVideo.toString();
+}
+
+void _removeProgressCallback(
+  String downloadID,
+  ProgressCallback progressCallback,
+) {
+  final callbacks = _progressCallbacks[downloadID];
+  if (callbacks == null) return;
+  callbacks.remove(progressCallback);
+  if (callbacks.isEmpty) {
+    _progressCallbacks.remove(downloadID);
+  }
+}
+
+void _notifyProgressCallbacks(String downloadID, int count, int total) {
+  for (final callback in List<ProgressCallback>.of(
+    _progressCallbacks[downloadID] ?? const {},
+  )) {
+    try {
+      callback(count, total);
+    } catch (error, stackTrace) {
+      _logger.warning("Download progress callback failed", error, stackTrace);
+    }
   }
 }
 
@@ -173,9 +199,10 @@ Future<File?> getFileFromServer(
     return fileFromCache.file;
   }
   final downloadID = file.uploadedFileID.toString() + liveVideo.toString();
+  final progressID = _progressCallbackID(file, liveVideo);
 
   if (progressCallback != null) {
-    _progressCallbacks[downloadID] = progressCallback;
+    (_progressCallbacks[progressID] ??= {}).add(progressCallback);
   }
 
   final download = _runOncePerKey(_fileDownloadsInProgress, downloadID, () {
@@ -184,7 +211,7 @@ Future<File?> getFileFromServer(
       downloadFuture = _getLivePhotoFromServer(
         file,
         progressCallback: (count, total) {
-          _progressCallbacks[downloadID]?.call(count, total);
+          _notifyProgressCallbacks(progressID, count, total);
         },
         needLiveVideo: liveVideo,
         forGalleryDownload: forGalleryDownload,
@@ -194,13 +221,13 @@ Future<File?> getFileFromServer(
         file,
         cacheManager,
         progressCallback: (count, total) {
-          _progressCallbacks[downloadID]?.call(count, total);
+          _notifyProgressCallbacks(progressID, count, total);
         },
         forGalleryDownload: forGalleryDownload,
       );
     }
     return downloadFuture;
-  }, onComplete: () => _progressCallbacks.remove(downloadID));
+  }, onComplete: () => _progressCallbacks.remove(progressID));
   return handleDownloadDecryptionFailureForCaller(
     download,
     rethrowDecryptionFailure: forGalleryDownload || throwOnDecryptionFailure,

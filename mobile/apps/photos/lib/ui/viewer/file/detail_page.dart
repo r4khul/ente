@@ -14,6 +14,7 @@ import 'package:logging/logging.dart';
 import 'package:photos/core/configuration.dart';
 import 'package:photos/core/errors.dart';
 import "package:photos/core/event_bus.dart";
+import 'package:photos/ente_theme_data.dart';
 import "package:photos/events/file_caption_updated_event.dart";
 import "package:photos/events/guest_view_event.dart";
 import "package:photos/events/pause_video_event.dart";
@@ -22,6 +23,7 @@ import 'package:photos/models/file/file.dart';
 import "package:photos/models/file/file_type.dart";
 import "package:photos/models/gallery_type.dart";
 import 'package:photos/module/download/file.dart';
+import "package:photos/module/download/task.dart";
 import "package:photos/module/download/thumbnail.dart";
 import "package:photos/service_locator.dart";
 import "package:photos/services/collections_service.dart";
@@ -203,6 +205,8 @@ class _BodyState extends State<_Body> {
   final Map<EnteFile, VideoStreamChangeController>
   _videoStreamChangeControllers = Map.identity();
   ValueNotifier<double>? _bottomControlsAdditionalInsetNotifier;
+  _EditPreparation? _editPreparation;
+  StreamSubscription<DownloadTask>? _editDownloadTaskSubscription;
 
   @override
   void initState() {
@@ -285,6 +289,10 @@ class _BodyState extends State<_Body> {
 
   @override
   void dispose() {
+    final preparation = _editPreparation;
+    if (preparation != null) {
+      _clearEditPreparation(preparation);
+    }
     _guestViewEventSubscription.cancel();
     _captionUpdatedSubscription.cancel();
     _filmstripCoordinator.dispose();
@@ -801,56 +809,193 @@ class _BodyState extends State<_Body> {
       );
       return;
     }
-    final dialog = createProgressDialog(context, context.strings.pleaseWait);
-    await dialog.show();
+    if (_editPreparation != null) {
+      return;
+    }
 
+    final preparation = _EditPreparation(file);
+    preparation.onDownloadProgress = (count, total) {
+      if (!mounted || !identical(_editPreparation, preparation)) {
+        return;
+      }
+      final totalBytes = total > 0 ? total : file.fileSize ?? 0;
+      if (totalBytes <= 0) {
+        return;
+      }
+      preparation.progress.value = (count / totalBytes)
+          .clamp(0.0, 1.0)
+          .toDouble();
+    };
+    _editPreparation = preparation;
+    if (file.isRemoteOnlyFile &&
+        downloadManager.enableResumableDownload(file.fileSize)) {
+      _editDownloadTaskSubscription = downloadManager
+          .watchDownload(file.uploadedFileID!)
+          .listen((task) {
+            if (!_isCurrentEditPreparation(preparation)) {
+              return;
+            }
+            preparation.progress.value = task.progress
+                .clamp(0.0, 1.0)
+                .toDouble();
+          });
+    }
+    unawaited(_showEditPreparationDialog(preparation));
+    if (_isCurrentEditPreparation(preparation)) {
+      unawaited(_prepareEditor(preparation));
+    }
+  }
+
+  Future<void> _showEditPreparationDialog(_EditPreparation preparation) async {
+    var wasCancelled = true;
     try {
-      final ioFile = await getFile(file);
-      if (ioFile == null) {
-        if (!mounted) return;
-        showShortToast(context, context.strings.failedToFetchOriginalForEdit);
-        await dialog.hide();
-        return;
-      }
-      if (file.fileType == FileType.video) {
-        await dialog.hide();
-        if (!mounted) return;
-        replacePage(
-          context,
-          VideoEditorPage(
-            file: file,
-            ioFile: ioFile,
-            detailPageConfig: widget.config.copyWith(
-              files: _files,
-              selectedIndex: _selectedIndexNotifier.value,
-            ),
-          ),
-        );
-        return;
-      }
-      final imageProvider = ExtendedFileImageProvider(
-        ioFile,
-        cacheRawData: true,
+      wasCancelled =
+          await showDialog<bool>(
+            context: context,
+            useRootNavigator: false,
+            barrierDismissible: false,
+            builder: (dialogContext) {
+              return _EditPreparationDialog(
+                title: preparation.file.fileType == FileType.video
+                    ? context.strings.preparingVideo
+                    : context.strings.preparingPhoto,
+                progress: preparation.progress,
+                onCancel: () {
+                  if (!_isCurrentEditPreparation(preparation) ||
+                      preparation.isClosingDialog) {
+                    return;
+                  }
+                  _clearEditPreparation(preparation);
+                  Navigator.of(dialogContext).pop(true);
+                },
+              );
+            },
+          ) ??
+          true;
+    } catch (error, stackTrace) {
+      _logger.warning(
+        "Failed to show edit preparation dialog",
+        error,
+        stackTrace,
       );
-      if (!mounted) return;
-      await precacheImage(imageProvider, context);
-      await dialog.hide();
-      if (!mounted) return;
+    } finally {
+      preparation.dialogDismissed.complete();
+      preparation.progress.dispose();
+    }
+    if (wasCancelled != false) {
+      _clearEditPreparation(preparation);
+    }
+  }
+
+  Future<void> _prepareEditor(_EditPreparation preparation) async {
+    try {
+      final ioFile = await getFile(
+        preparation.file,
+        progressCallback: preparation.onDownloadProgress,
+      );
+      if (!_isCurrentEditPreparation(preparation)) {
+        return;
+      }
+      if (ioFile == null) {
+        await _closeEditPreparationDialog(preparation);
+        if (_isCurrentEditPreparation(preparation) && mounted) {
+          showShortToast(context, context.strings.failedToFetchOriginalForEdit);
+          _clearEditPreparation(preparation);
+        }
+        return;
+      }
+
+      if (preparation.file.fileType != FileType.video) {
+        preparation.progress.value = null;
+        if (!mounted) {
+          return;
+        }
+        await precacheImage(
+          ExtendedFileImageProvider(ioFile, cacheRawData: true),
+          context,
+        );
+        if (!_isCurrentEditPreparation(preparation)) {
+          return;
+        }
+      }
+
+      await _closeEditPreparationDialog(preparation);
+      if (!_isCurrentEditPreparation(preparation) || !mounted) {
+        return;
+      }
+      final detailPageConfig = widget.config.copyWith(
+        files: _files,
+        selectedIndex: _selectedIndexNotifier.value,
+      );
+      _clearEditPreparation(preparation);
       replacePage(
         context,
-        ImageEditorPage(
-          originalFile: file,
-          file: ioFile,
-          detailPageConfig: widget.config.copyWith(
-            files: _files,
-            selectedIndex: _selectedIndexNotifier.value,
-          ),
-        ),
+        preparation.file.fileType == FileType.video
+            ? VideoEditorPage(
+                file: preparation.file,
+                ioFile: ioFile,
+                detailPageConfig: detailPageConfig,
+              )
+            : ImageEditorPage(
+                originalFile: preparation.file,
+                file: ioFile,
+                detailPageConfig: detailPageConfig,
+              ),
       );
-    } catch (e) {
-      await dialog.hide();
-      _logger.warning("Failed to initiate edit", e);
+    } catch (error, stackTrace) {
+      _logger.warning("Failed to initiate edit", error, stackTrace);
+      await _closeEditPreparationDialog(preparation);
+      if (_isCurrentEditPreparation(preparation)) {
+        _clearEditPreparation(preparation);
+      }
     }
+  }
+
+  bool _isCurrentEditPreparation(_EditPreparation preparation) {
+    return mounted && identical(_editPreparation, preparation);
+  }
+
+  Future<void> _closeEditPreparationDialog(_EditPreparation preparation) async {
+    if (!_isCurrentEditPreparation(preparation)) {
+      return;
+    }
+    if (preparation.isClosingDialog) {
+      await preparation.dialogDismissed.future;
+      return;
+    }
+    preparation.isClosingDialog = true;
+    Navigator.of(context).pop(false);
+    await preparation.dialogDismissed.future;
+  }
+
+  void _clearEditPreparation(_EditPreparation preparation) {
+    if (!identical(_editPreparation, preparation)) {
+      return;
+    }
+    _editPreparation = null;
+    _cancelEditDownloadTaskSubscription(preparation.file.uploadedFileID);
+    removeDownloadCallback(preparation.file, preparation.onDownloadProgress);
+  }
+
+  void _cancelEditDownloadTaskSubscription(int? fileID) {
+    final cancellation = _editDownloadTaskSubscription?.cancel();
+    _editDownloadTaskSubscription = null;
+    if (cancellation == null || fileID == null) {
+      return;
+    }
+    unawaited(
+      cancellation
+          .then((_) {
+            return downloadManager.closeDownloadStreamIfUnused(fileID);
+          })
+          .catchError((Object error, StackTrace stackTrace) {
+            _logger.warning(
+              "Failed to release edit download observer",
+              error,
+              stackTrace,
+            );
+          }),
+    );
   }
 
   Future<bool> _requestAuthentication() async {
@@ -944,6 +1089,61 @@ class _BodyState extends State<_Body> {
     for (var index = 0; index < files.length; index++) {
       _fileIndexByIdentity[files[index]] = index;
     }
+  }
+}
+
+class _EditPreparation {
+  _EditPreparation(this.file);
+
+  final EnteFile file;
+  final progress = ValueNotifier<double?>(null);
+  final dialogDismissed = Completer<void>();
+  bool isClosingDialog = false;
+  late void Function(int count, int total) onDownloadProgress;
+}
+
+class _EditPreparationDialog extends StatelessWidget {
+  const _EditPreparationDialog({
+    required this.title,
+    required this.progress,
+    required this.onCancel,
+  });
+
+  final String title;
+  final ValueListenable<double?> progress;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          onCancel();
+        }
+      },
+      child: AlertDialog(
+        title: Text(
+          title,
+          style: getEnteTextTheme(context).smallMuted,
+          textAlign: TextAlign.center,
+        ),
+        content: ValueListenableBuilder<double?>(
+          valueListenable: progress,
+          builder: (context, value, _) {
+            return LinearProgressIndicator(
+              value: value,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                Theme.of(context).colorScheme.greenAlternative,
+              ),
+            );
+          },
+        ),
+        actions: [
+          TextButton(onPressed: onCancel, child: Text(context.strings.cancel)),
+        ],
+      ),
+    );
   }
 }
 

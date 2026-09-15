@@ -1,0 +1,1 @@
+- Improved editor preparation download progress. (@r4khul)
