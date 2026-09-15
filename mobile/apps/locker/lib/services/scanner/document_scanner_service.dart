@@ -161,6 +161,7 @@ class DocumentScannerService {
                 result.sourceHeight.toDouble(),
               ),
         rotationDegrees: 0,
+        materializedRotationDegrees: 0,
         resolvedColorMode: _colorModeFromRust(result.colorMode),
         sourceWidth: result.sourceWidth,
         sourceHeight: result.sourceHeight,
@@ -179,6 +180,7 @@ class DocumentScannerService {
     int? rotationDegrees,
   }) async {
     try {
+      final effectiveRotation = rotationDegrees ?? page.rotationDegrees;
       final sourceBytes = await page.sourceJpeg.readAsBytes();
       final result = await _readySession.reprocess(
         sourceBytes: sourceBytes,
@@ -188,7 +190,7 @@ class DocumentScannerService {
             page.sourceWidth,
             page.sourceHeight,
           ),
-          rotationDegrees: rotationDegrees ?? page.rotationDegrees,
+          rotationDegrees: effectiveRotation,
           colorMode: _colorModeToRust(page.resolvedColorMode),
           maxPixels: _maxPixels,
         ),
@@ -204,6 +206,7 @@ class DocumentScannerService {
         processedJpeg: processed,
         quad: quad,
         rotationDegrees: rotationDegrees,
+        materializedRotationDegrees: effectiveRotation,
         width: result.outputWidth,
         height: result.outputHeight,
       );

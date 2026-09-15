@@ -19,6 +19,7 @@ class ScannedPage {
     required this.processedJpeg,
     required this.quad,
     required this.rotationDegrees,
+    required this.materializedRotationDegrees,
     required this.resolvedColorMode,
     required this.sourceWidth,
     required this.sourceHeight,
@@ -36,6 +37,14 @@ class ScannedPage {
 
   final int rotationDegrees;
 
+  final int materializedRotationDegrees;
+
+  int get previewRotationDegrees =>
+      (rotationDegrees - materializedRotationDegrees) % 360;
+
+  bool get needsMaterialization =>
+      rotationDegrees != materializedRotationDegrees;
+
   final ScanColorMode resolvedColorMode;
 
   final int sourceWidth;
@@ -48,6 +57,7 @@ class ScannedPage {
     File? processedJpeg,
     ScanQuad? quad,
     int? rotationDegrees,
+    int? materializedRotationDegrees,
     ScanColorMode? resolvedColorMode,
     int? width,
     int? height,
@@ -57,6 +67,8 @@ class ScannedPage {
     processedJpeg: processedJpeg ?? this.processedJpeg,
     quad: quad ?? this.quad,
     rotationDegrees: rotationDegrees ?? this.rotationDegrees,
+    materializedRotationDegrees:
+        materializedRotationDegrees ?? this.materializedRotationDegrees,
     resolvedColorMode: resolvedColorMode ?? this.resolvedColorMode,
     sourceWidth: sourceWidth,
     sourceHeight: sourceHeight,
