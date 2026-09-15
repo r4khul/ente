@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:ente_components/ente_components.dart';
 import 'package:ente_strings/ente_strings.dart';
@@ -9,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:intl/intl.dart';
-import 'package:locker/services/scanner/scan_geometry.dart';
 import 'package:locker/services/scanner/scan_session_controller.dart';
 import 'package:locker/services/scanner/scanner_models.dart';
 import 'package:locker/ui/components/text_input_sheet.dart';
@@ -95,7 +93,7 @@ class ScannerReviewPage extends StatefulWidget {
 }
 
 class _ScannerReviewPageState extends State<ScannerReviewPage>
-    with TickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   static const _thumbnailWidth = 40.0;
   static const _thumbnailHeight = 56.0;
 
@@ -104,16 +102,9 @@ class _ScannerReviewPageState extends State<ScannerReviewPage>
     vsync: this,
     duration: Motion.standard,
   );
-  late final AnimationController _rotateController = AnimationController(
-    vsync: this,
-    duration: Motion.slow,
-  );
   int _index = 0;
   bool _operationInFlight = false;
   String? _deletingId;
-  String? _rotatingId;
-  File? _rotatingFile;
-  double _rotatingAspect = 1;
 
   @override
   void initState() {
@@ -137,7 +128,6 @@ class _ScannerReviewPageState extends State<ScannerReviewPage>
     widget.session.removeListener(_onSessionChanged);
     _pageController.dispose();
     _deleteController.dispose();
-    _rotateController.dispose();
     super.dispose();
   }
 
@@ -176,19 +166,31 @@ class _ScannerReviewPageState extends State<ScannerReviewPage>
   }
 
   Future<void> _saveToEnte() => _runExclusive(() async {
-    final pdf = await _buildPdf();
-    if (!mounted) return;
-    final didUpload = await widget.onUploadFiles([pdf]);
-    if (!mounted) return;
-    if (didUpload) {
-      showShortToast(context, context.strings.scanSaved);
-      Navigator.of(context).pop(true);
+    try {
+      final pdf = await _buildPdf();
+      if (!mounted) return;
+      final didUpload = await widget.onUploadFiles([pdf]);
+      if (!mounted) return;
+      if (didUpload) {
+        showShortToast(context, context.strings.scanSaved);
+        Navigator.of(context).pop(true);
+      }
+    } catch (_) {
+      if (mounted) {
+        showShortToast(context, context.strings.somethingWentWrong);
+      }
     }
   });
 
   Future<void> _share() => _runExclusive(() async {
-    final pdf = await _buildPdf();
-    await SharePlus.instance.share(ShareParams(files: [XFile(pdf.path)]));
+    try {
+      final pdf = await _buildPdf();
+      await SharePlus.instance.share(ShareParams(files: [XFile(pdf.path)]));
+    } catch (_) {
+      if (mounted) {
+        showShortToast(context, context.strings.somethingWentWrong);
+      }
+    }
   });
 
   Future<void> _rename() async {
@@ -219,75 +221,43 @@ class _ScannerReviewPageState extends State<ScannerReviewPage>
     );
   });
 
-  Future<void> _rotate() => _runExclusive(() async {
+  void _rotate(int quarterTurns) {
     final page = _currentPage;
     if (page == null) return;
     unawaited(HapticFeedback.selectionClick());
-    setState(() {
-      _rotatingId = page.id;
-      _rotatingFile = page.processedJpeg;
-      _rotatingAspect = page.height == 0 ? 1 : page.width / page.height;
-    });
-    try {
-      await Future.wait([
-        _rotateController.forward(from: 0),
-        widget.session.rotatePageClockwise(page.id),
-      ]);
-      if (!mounted) return;
-      for (final updated in widget.session.pages) {
-        if (updated.id == page.id) {
-          await precacheImage(FileImage(updated.processedJpeg), context);
-          break;
-        }
-      }
-    } catch (_) {
-      if (mounted) {
-        showShortToast(context, context.strings.somethingWentWrong);
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _rotatingId = null;
-          _rotatingFile = null;
-        });
-        _rotateController.reset();
-      }
-    }
-  });
-
-  Widget _buildRotatingPage(File file, double aspect) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final box = constraints.biggest;
-        final before = fittedRect(box, aspect);
-        final after = fittedRect(box, 1 / aspect);
-        final targetScale = after.width / before.height;
-        return AnimatedBuilder(
-          animation: _rotateController,
-          builder: (context, child) {
-            final t = Curves.easeInOutCubic.transform(_rotateController.value);
-            return Transform.rotate(
-              angle: t * math.pi / 2,
-              child: Transform.scale(
-                scale: 1 + (targetScale - 1) * t,
-                child: child,
-              ),
-            );
-          },
-          child: Center(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(Radii.sm),
-              child: Image.file(
-                file,
-                key: ValueKey(file.path),
-                fit: BoxFit.contain,
-              ),
-            ),
-          ),
-        );
-      },
-    );
+    widget.session.rotatePage(page.id, quarterTurns);
   }
+
+  Widget _withPreviewRotation(ScannedPage page, Widget child) {
+    final quarterTurns = page.previewRotationDegrees ~/ 90;
+    if (quarterTurns == 0) return child;
+    return RotatedBox(quarterTurns: quarterTurns, child: child);
+  }
+
+  Widget _buildPreviewImage(ScannedPage page) => _withPreviewRotation(
+    page,
+    ClipRRect(
+      borderRadius: BorderRadius.circular(Radii.sm),
+      child: Image.file(
+        page.processedJpeg,
+        key: ValueKey(page.processedJpeg.path),
+        fit: BoxFit.contain,
+      ),
+    ),
+  );
+
+  Widget _buildThumbnailImage(ScannedPage page, BuildContext context) =>
+      _withPreviewRotation(
+        page,
+        Image.file(
+          page.processedJpeg,
+          key: ValueKey(page.processedJpeg.path),
+          fit: BoxFit.cover,
+          cacheHeight:
+              (_thumbnailHeight * MediaQuery.devicePixelRatioOf(context))
+                  .round(),
+        ),
+      );
 
   Future<void> _delete() => _runExclusive(() async {
     final page = _currentPage;
@@ -431,15 +401,7 @@ class _ScannerReviewPageState extends State<ScannerReviewPage>
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(Radii.xs - 1),
-                  child: Image.file(
-                    page.processedJpeg,
-                    key: ValueKey(page.processedJpeg.path),
-                    fit: BoxFit.cover,
-                    cacheHeight:
-                        (_thumbnailHeight *
-                                MediaQuery.devicePixelRatioOf(context))
-                            .round(),
-                  ),
+                  child: _buildThumbnailImage(page, context),
                 ),
               ),
             ),
@@ -509,22 +471,9 @@ class _ScannerReviewPageState extends State<ScannerReviewPage>
                                 setState(() => _index = index),
                             itemBuilder: (context, index) {
                               final page = pages[index];
-                              final image = ClipRRect(
-                                borderRadius: BorderRadius.circular(Radii.sm),
-                                child: Image.file(
-                                  page.processedJpeg,
-                                  key: ValueKey(page.processedJpeg.path),
-                                  fit: BoxFit.contain,
-                                ),
-                              );
-                              final rotatingFile = _rotatingFile;
+                              final image = _buildPreviewImage(page);
                               final content =
-                                  page.id == _rotatingId && rotatingFile != null
-                                  ? _buildRotatingPage(
-                                      rotatingFile,
-                                      _rotatingAspect,
-                                    )
-                                  : index == current
+                                  index == current && !page.needsMaterialization
                                   ? ScannerPageHero(
                                       file: page.processedJpeg,
                                       primary: true,
@@ -605,8 +554,19 @@ class _ScannerReviewPageState extends State<ScannerReviewPage>
                           icon: HugeIcons.strokeRoundedRotateClockwise,
                           color: colors.textBase,
                         ),
-                        onTap: pageCount == 0 ? null : _rotate,
-                        tooltip: l10n.rotate,
+                        onTap: pageCount == 0 ? null : () => _rotate(-1),
+                        shouldSurfaceExecutionStates: false,
+                        tooltip: '${l10n.rotate} ${l10n.left}',
+                      ),
+                      const SizedBox(width: Spacing.lg),
+                      IconButtonComponent(
+                        icon: HugeIcon(
+                          icon: HugeIcons.strokeRoundedRotate02,
+                          color: colors.textBase,
+                        ),
+                        onTap: pageCount == 0 ? null : () => _rotate(1),
+                        shouldSurfaceExecutionStates: false,
+                        tooltip: '${l10n.rotate} ${l10n.right}',
                       ),
                       const SizedBox(width: Spacing.lg),
                       IconButtonComponent(

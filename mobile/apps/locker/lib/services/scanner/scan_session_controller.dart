@@ -135,13 +135,22 @@ class ScanSessionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> rotatePageClockwise(String pageId) async {
+  void rotatePage(String pageId, int quarterTurns) {
     final index = _pages.indexWhere((page) => page.id == pageId);
     if (index < 0) return;
-    await updatePage(
-      pageId,
-      rotationDegrees: (_pages[index].rotationDegrees + 90) % 360,
-    );
+    final page = _pages[index];
+    final rotationDegrees = (page.rotationDegrees + quarterTurns * 90) % 360;
+    if (rotationDegrees == page.rotationDegrees) return;
+    _pages[index] = page.copyWith(rotationDegrees: rotationDegrees);
+    notifyListeners();
+  }
+
+  Future<void> materializePendingPages() async {
+    await waitForPending();
+    for (final page in List<ScannedPage>.of(_pages)) {
+      if (!page.needsMaterialization) continue;
+      await updatePage(page.id);
+    }
   }
 
   void reorderPage(int oldIndex, int newIndex) {
@@ -166,6 +175,7 @@ class ScanSessionController extends ChangeNotifier {
     if (fileName == null) {
       throw StateError('fileName has not been set');
     }
+    await materializePendingPages();
     final specs = <PdfPageSpec>[];
     for (final page in List.of(_pages)) {
       final jpeg = await page.processedJpeg.readAsBytes();

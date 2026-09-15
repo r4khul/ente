@@ -23,10 +23,17 @@ class ScannerProcessedThumbnail extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final box = constraints.biggest;
-        final aspect = page.height == 0 ? 1.0 : page.width / page.height;
+        final quarterTurns = page.previewRotationDegrees ~/ 90;
+        final materializedAspect = page.height == 0
+            ? 1.0
+            : page.width / page.height;
+        final aspect = quarterTurns.isOdd
+            ? 1 / materializedAspect
+            : materializedAspect;
         final size = aspect < 1
             ? Size(box.width * _zoom, box.width * _zoom / aspect)
             : Size(box.height * _zoom * aspect, box.height * _zoom);
+        final imageHeight = quarterTurns.isOdd ? size.width : size.height;
         return ClipRect(
           child: OverflowBox(
             alignment: Alignment.topCenter,
@@ -36,14 +43,17 @@ class ScannerProcessedThumbnail extends StatelessWidget {
               offset: Offset(0, -size.height * _inset),
               child: SizedBox.fromSize(
                 size: size,
-                child: Image(
-                  image: ResizeImage(
-                    FileImage(page.processedJpeg),
-                    height:
-                        (size.height * MediaQuery.devicePixelRatioOf(context))
-                            .round(),
+                child: RotatedBox(
+                  quarterTurns: quarterTurns,
+                  child: Image(
+                    image: ResizeImage(
+                      FileImage(page.processedJpeg),
+                      height:
+                          (imageHeight * MediaQuery.devicePixelRatioOf(context))
+                              .round(),
+                    ),
+                    fit: BoxFit.fill,
                   ),
-                  fit: BoxFit.fill,
                 ),
               ),
             ),
