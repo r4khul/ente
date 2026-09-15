@@ -67,6 +67,8 @@ class _VideoWidgetMediaKitState extends State<VideoWidgetMediaKit>
   late final player = Player();
   VideoController? controller;
   final _progressNotifier = ValueNotifier<double?>(null);
+  late final void Function(int, int) _downloadProgressCallback =
+      _onDownloadProgress;
   bool _isAppInFG = true;
   late StreamSubscription<PauseVideoEvent> pauseVideoSubscription;
   late StreamSubscription<ResumeVideoEvent> resumeVideoSubscription;
@@ -214,7 +216,7 @@ class _VideoWidgetMediaKitState extends State<VideoWidgetMediaKit>
     pauseVideoSubscription.cancel();
     resumeVideoSubscription.cancel();
     _muteSubscription?.cancel();
-    removeDownloadCallback(widget.file);
+    removeDownloadCallback(widget.file, _downloadProgressCallback);
     _progressNotifier.dispose();
     WidgetsBinding.instance.removeObserver(this);
     if (_downloadTaskSubscription != null) {
@@ -280,17 +282,7 @@ class _VideoWidgetMediaKitState extends State<VideoWidgetMediaKit>
     getFileFromServer(
           widget.file,
           throwOnDecryptionFailure: true,
-          progressCallback: (count, total) {
-            if (!mounted) {
-              return;
-            }
-            _progressNotifier.value = count / (widget.file.fileSize ?? total);
-            if (_progressNotifier.value == 1) {
-              if (mounted) {
-                showShortToast(context, context.strings.decryptingVideo);
-              }
-            }
-          },
+          progressCallback: _downloadProgressCallback,
         )
         .then((file) {
           if (file != null) {
@@ -309,6 +301,14 @@ class _VideoWidgetMediaKitState extends State<VideoWidgetMediaKit>
             );
           }
         });
+  }
+
+  void _onDownloadProgress(int count, int total) {
+    if (!mounted) return;
+    _progressNotifier.value = count / (widget.file.fileSize ?? total);
+    if (_progressNotifier.value == 1 && mounted) {
+      showShortToast(context, context.strings.decryptingVideo);
+    }
   }
 
   void _setFileSizeIfNull() {

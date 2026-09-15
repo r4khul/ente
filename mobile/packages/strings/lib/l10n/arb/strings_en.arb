@@ -3170,6 +3170,8 @@
     }
   },
   "preparingLogs": "Preparing logs...",
+  "preparingPhoto": "Preparing photo",
+  "preparingVideo": "Preparing video",
   "preserveMore": "Preserve more",
   "pressAndHoldToPlayVideoDetailed": "Press and hold on the image to  play video",
   "preview": "Preview",

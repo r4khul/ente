@@ -96,6 +96,7 @@ class DownloadManager {
     if (startTime == null ||
         DateTime.now().microsecondsSinceEpoch - startTime < 1e6) {
       _logger.info('Download paused too soon, ignoring pause request');
+      await closeDownloadStreamIfUnused(fileId);
       return;
     }
     final token = _cancelTokens[fileId];
@@ -108,11 +109,14 @@ class DownloadManager {
       _updateTask(task.copyWith(status: DownloadStatus.paused));
     }
 
+    await closeDownloadStreamIfUnused(fileId);
+  }
+
+  Future<void> closeDownloadStreamIfUnused(int fileId) async {
     final stream = _streams[fileId];
-    if (stream != null && !stream.hasListener) {
-      await stream.close();
-      _streams.remove(fileId);
-    }
+    if (stream == null || stream.hasListener) return;
+    _streams.remove(fileId);
+    await stream.close();
   }
 
   Future<void> cancel(int fileId) async {
@@ -428,11 +432,7 @@ class DownloadManager {
     _completers.remove(fileId);
     _cancelTokens.remove(fileId);
 
-    final stream = _streams[fileId];
-    if (stream != null && !stream.hasListener) {
-      stream.close();
-      _streams.remove(fileId);
-    }
+    unawaited(closeDownloadStreamIfUnused(fileId));
   }
 
   Future<void> dispose() async {

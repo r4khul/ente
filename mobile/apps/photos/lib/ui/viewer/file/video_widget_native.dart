@@ -77,6 +77,8 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
     with WidgetsBindingObserver {
   final Logger _logger = Logger("VideoWidgetNative");
   final _progressNotifier = ValueNotifier<double?>(null);
+  late final void Function(int, int) _downloadProgressCallback =
+      _onDownloadProgress;
   late StreamSubscription<PauseVideoEvent> pauseVideoSubscription;
   late StreamSubscription<ResumeVideoEvent> resumeVideoSubscription;
   StreamSubscription<VideoMuteChangedEvent>? _muteSubscription;
@@ -307,7 +309,7 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
     pauseVideoSubscription.cancel();
     resumeVideoSubscription.cancel();
     _muteSubscription?.cancel();
-    removeDownloadCallback(widget.file);
+    removeDownloadCallback(widget.file, _downloadProgressCallback);
     _progressNotifier.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _isPlaybackReady.dispose();
@@ -693,17 +695,7 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
     getFileFromServer(
           widget.file,
           throwOnDecryptionFailure: true,
-          progressCallback: (count, total) {
-            if (!mounted) {
-              return;
-            }
-            _progressNotifier.value = count / (widget.file.fileSize ?? total);
-            if (_progressNotifier.value == 1) {
-              if (mounted) {
-                showShortToast(context, context.strings.decryptingVideo);
-              }
-            }
-          },
+          progressCallback: _downloadProgressCallback,
         )
         .then((file) {
           if (file != null) {
@@ -722,6 +714,14 @@ class _VideoWidgetNativeState extends State<VideoWidgetNative>
             );
           }
         });
+  }
+
+  void _onDownloadProgress(int count, int total) {
+    if (!mounted) return;
+    _progressNotifier.value = count / (widget.file.fileSize ?? total);
+    if (_progressNotifier.value == 1 && mounted) {
+      showShortToast(context, context.strings.decryptingVideo);
+    }
   }
 
   void _setFileSizeIfNull() {
