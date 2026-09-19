@@ -1,0 +1,1 @@
+- Improved document scan rotation controls.
