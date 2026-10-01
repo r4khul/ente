@@ -43,12 +43,14 @@ import 'package:pro_image_editor/pro_image_editor.dart';
 class ImageEditorPage extends StatefulWidget {
   final ente.EnteFile originalFile;
   final File file;
+  final Size originalSize;
   final DetailPageConfiguration detailPageConfig;
 
   const ImageEditorPage({
     super.key,
     required this.file,
     required this.originalFile,
+    required this.originalSize,
     required this.detailPageConfig,
   });
 
@@ -266,12 +268,13 @@ class _ImageEditorPageState extends State<ImageEditorPage> {
                 luminance: context.strings.imageEditorLuminance,
               ),
             ),
-            imageGeneration: const ImageGenerationConfigs(
+            imageGeneration: ImageGenerationConfigs(
               jpegQuality: 100,
               enableIsolateGeneration: true,
               captureImageByteFormat: ui.ImageByteFormat.rawStraightRgba,
               outputFormat: OutputFormat.png,
               pngLevel: 0,
+              maxOutputSize: Size.square(widget.originalSize.longestSide),
             ),
             layerInteraction: const LayerInteractionConfigs(
               hideToolbarOnInteraction: false,

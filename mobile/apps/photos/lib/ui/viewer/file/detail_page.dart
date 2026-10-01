@@ -48,6 +48,7 @@ import "package:photos/ui/viewer/file/video_control/gallery_video_controls.dart"
 import "package:photos/ui/viewer/file/video_stream_change.dart";
 import 'package:photos/ui/viewer/gallery/gallery.dart';
 import 'package:photos/utils/dialog_util.dart';
+import 'package:photos/utils/image_util.dart';
 
 const _socialRightInset = 24.0;
 const _socialBottomBarClearance = 98.0;
@@ -836,6 +837,14 @@ class _BodyState extends State<_Body> {
         );
         return;
       }
+      final dimensions = await getImageDimensions(imagePath: ioFile.path);
+      if (dimensions == null) {
+        await dialog.hide();
+        if (mounted) {
+          showShortToast(context, context.strings.failedToFetchOriginalForEdit);
+        }
+        return;
+      }
       final imageProvider = ExtendedFileImageProvider(
         ioFile,
         cacheRawData: true,
@@ -849,6 +858,10 @@ class _BodyState extends State<_Body> {
         ImageEditorPage(
           originalFile: file,
           file: ioFile,
+          originalSize: Size(
+            dimensions.width.toDouble(),
+            dimensions.height.toDouble(),
+          ),
           detailPageConfig: widget.config.copyWith(
             files: _files,
             selectedIndex: _selectedIndexNotifier.value,
