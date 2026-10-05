@@ -187,7 +187,7 @@ class _ImageEditorPageState extends State<ImageEditorPage> {
     }
   }
 
-  Future<void> _showExitConfirmationDialog(BuildContext context) async {
+  Future<bool> _confirmDiscardEdits(BuildContext context) async {
     final l10n = context.strings;
     final actionResult = await showActionSheet(
       context: context,
@@ -213,10 +213,18 @@ class _ImageEditorPageState extends State<ImageEditorPage> {
       body: l10n.doYouWantToDiscardTheEditsYouHaveMade,
       actionSheetType: ActionSheetType.defaultActionSheet,
     );
-    if (!context.mounted) return;
-    if (actionResult?.action != null &&
-        actionResult!.action == ButtonAction.first) {
+    return actionResult?.action == ButtonAction.first;
+  }
+
+  Future<void> _showExitConfirmationDialog(BuildContext context) async {
+    if (await _confirmDiscardEdits(context) && context.mounted) {
       replacePage(context, DetailPage(widget.detailPageConfig));
+    }
+  }
+
+  Future<void> _showSubEditorDiscardDialog(BuildContext context) async {
+    if (await _confirmDiscardEdits(context) && context.mounted) {
+      Navigator.of(context).pop();
     }
   }
 
@@ -261,7 +269,7 @@ class _ImageEditorPageState extends State<ImageEditorPage> {
           callbacks: ProImageEditorCallbacks(
             onCloseEditor: (mode) {
               if (mode != EditorMode.main) {
-                Navigator.of(context).pop();
+                _showSubEditorDiscardDialog(context);
                 return;
               }
               editorKey.currentState?.isPopScopeDisabled = true;
