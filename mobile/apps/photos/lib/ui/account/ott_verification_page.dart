@@ -148,27 +148,53 @@ class _OTTVerificationPageState extends State<OTTVerificationPage> {
               ),
             ),
             const SizedBox(height: 24),
-            Align(
-              alignment: Alignment.centerRight,
-              child: ButtonComponent(
-                label: context.strings.resendCode,
-                variant: ButtonComponentVariant.link,
-                size: ButtonComponentSize.small,
-                onTap: () async {
-                  // ignore: unawaited_futures
-                  UserService.instance.sendOtt(
-                    context,
-                    widget.email,
-                    isCreateAccountScreen: widget.isCreateAccountScreen,
-                    isResetPasswordScreen: widget.isResetPasswordScreen,
-                    isChangeEmail: widget.isChangeEmail,
-                  );
-                },
+            if (widget.isResetPasswordScreen)
+              Center(child: _buildResendCodeButton())
+            else
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Semantics(
+                    button: true,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => Navigator.of(context).pop(),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        child: Text(
+                          context.strings.changeEmail,
+                          style: TextStyles.bodyLink.copyWith(
+                            color: colors.textLight,
+                            decorationColor: colors.textLight,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  _buildResendCodeButton(),
+                ],
               ),
-            ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildResendCodeButton() {
+    return ButtonComponent(
+      label: context.strings.resendCode,
+      variant: ButtonComponentVariant.link,
+      size: ButtonComponentSize.small,
+      onTap: () async {
+        // ignore: unawaited_futures
+        UserService.instance.sendOtt(
+          context,
+          widget.email,
+          isCreateAccountScreen: widget.isCreateAccountScreen,
+          isResetPasswordScreen: widget.isResetPasswordScreen,
+          isChangeEmail: widget.isChangeEmail,
+        );
+      },
     );
   }
 }

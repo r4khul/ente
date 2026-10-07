@@ -43,7 +43,7 @@ class _RecoveryPageState extends State<RecoveryPage> {
           },
         ),
         title: Text(
-          context.strings.recoverAccount,
+          context.strings.forgotPassword,
           style: TextStyles.large.copyWith(color: colors.textBase),
         ),
         centerTitle: true,

@@ -1,0 +1,1 @@
+- Polished sign-up and login screens. The terms checkbox now starts unchecked and screen titles are clearer.

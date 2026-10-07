@@ -82,7 +82,7 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
     } else if (widget.mode == PasswordEntryMode.reset) {
       title = context.strings.resetPasswordTitle;
     } else if (_volatilePassword != null) {
-      title = context.strings.encryptionKeys;
+      title = context.strings.recoveryKey;
     }
 
     final isFormValid = _passwordsMatch && _isPasswordValid;
@@ -417,7 +417,7 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
         context,
         RecoveryKeyPage(
           result.privateKeyAttributes.recoveryKey,
-          context.strings.continueLabel,
+          context.strings.next,
           onDone: onDone,
           isOnboarding: true,
         ),

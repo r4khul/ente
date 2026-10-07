@@ -4720,6 +4720,10 @@
   "@useRecoveryKey": {
     "description": "Use recovery key button label"
   },
+  "useTwoFactorInstead": "Use 2FA instead",
+  "@useTwoFactorInstead": {
+    "description": "Link on the passkey verification screen to verify with an authenticator code instead"
+  },
   "username": "Username",
   "usernameHint": "Login ID or email",
   "useSelectedPhoto": "Use selected photo",

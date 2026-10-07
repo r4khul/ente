@@ -108,12 +108,6 @@ class _TwoFactorAuthenticationPageState
           children: [
             const SizedBox(height: 24),
             Text(
-              context.strings.twoFAVerification,
-              style: TextStyles.body.copyWith(color: colors.textBase),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
               context.strings.enterThe6digitCodeFromnyourAuthenticatorApp,
               style: TextStyles.body.copyWith(color: colors.textLight),
               textAlign: TextAlign.center,

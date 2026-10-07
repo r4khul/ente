@@ -65,7 +65,7 @@ class _LoginPasswordVerificationPageState
           },
         ),
         title: Text(
-          context.strings.logInLabel,
+          context.strings.enterPassword,
           style: TextStyles.large.copyWith(color: colors.textBase),
         ),
         centerTitle: true,
