@@ -10,6 +10,7 @@ import "package:photos/core/event_bus.dart";
 import "package:photos/db/files_db.dart";
 import "package:photos/db/ml/db.dart";
 import "package:photos/events/notification_event.dart";
+import "package:photos/events/tab_changed_event.dart";
 import "package:photos/service_locator.dart";
 import "package:photos/services/machine_learning/ml_indexing_isolate.dart";
 import "package:photos/services/machine_learning/ml_model_assets.dart";
@@ -164,6 +165,13 @@ class _MachineLearningSettingsPageState
           onTap: () async {
             if (!_hasAcknowledgedMLConsent) return;
             await toggleMlConsent();
+            if (!context.mounted || !hasGrantedMLConsent) return;
+            Navigator.of(context).popUntil(
+              (route) => route.isFirst && !route.willHandlePopInternally,
+            );
+            Bus.instance.fire(
+              TabChangedEvent(3, TabChangedEventSource.mlConsent),
+            );
           },
         ),
         const SizedBox(height: 12),
