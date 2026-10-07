@@ -55,6 +55,11 @@ post_install do |installer|
     target.build_configurations.each do |config|
       config.build_settings.delete 'IPHONEOS_DEPLOYMENT_TARGET'
 
+      if target.name == 'permission_handler_apple'
+        config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
+        config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_NOTIFICATIONS=1'
+      end
+
       if target.name == 'ente_photos_frb' && config.name == 'Debug'
         config.build_settings['ONLY_ACTIVE_ARCH[sdk=iphonesimulator*]'] = 'YES'
       end
