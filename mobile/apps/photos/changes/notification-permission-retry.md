@@ -1,0 +1,1 @@
+- Improved notification permission requests and retries on iOS.

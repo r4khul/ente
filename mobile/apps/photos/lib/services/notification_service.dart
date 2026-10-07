@@ -170,18 +170,22 @@ class NotificationService {
 
     final hasAttemptedPermission =
         _preferences.getBool(_keyHasAttemptedNotificationPermission) ?? false;
-    if (!hasAttemptedPermission) {
+    final isPermanentlyDenied =
+        Platform.isIOS &&
+        (await Permission.notification.status).isPermanentlyDenied;
+    if (!context.mounted) return false;
+    if (!hasAttemptedPermission && !isPermanentlyDenied) {
+      final granted = await _askPermissions();
       await _preferences.setBool(_keyHasAttemptedNotificationPermission, true);
-      if (!context.mounted) return false;
-      return _askPermissions();
+      return granted;
     }
 
-    if (!context.mounted) return false;
     await _openNotificationSettings();
     const interval = Duration(milliseconds: 500);
     const maxAttempts = 400;
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       await Future.delayed(interval);
+      if (!context.mounted) return false;
       if (await hasGrantedPermissions()) return true;
     }
     return false;
