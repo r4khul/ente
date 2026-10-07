@@ -577,6 +577,7 @@ class UserService {
   Future<void> setAttributes(KeyGenResult result) async {
     try {
       await _gateway.setKeyAttributes(result.keyAttributes);
+      await backupPreferenceService.setOnboardingBackupChoicePending(true);
       await _config.setKey(result.privateKeyAttributes.key);
       await _config.setSecretKey(result.privateKeyAttributes.secretKey);
       await _config.setKeyAttributes(result.keyAttributes);

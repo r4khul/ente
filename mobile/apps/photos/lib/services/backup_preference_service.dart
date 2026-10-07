@@ -16,6 +16,8 @@ class BackupPreferenceService {
       "has_manual_backup_folder_selection";
   static const String _keyOnboardingPermissionSkipped =
       "onboarding_permission_skipped";
+  static const String _keyOnboardingBackupChoicePending =
+      "onboarding_backup_choice_pending";
   static const String _keyOnlyNewSinceEpoch = "backup_only_new_since_epoch";
 
   final SharedPreferences _prefs;
@@ -48,6 +50,13 @@ class BackupPreferenceService {
 
   Future<void> setOnboardingPermissionSkipped(bool value) async {
     await _prefs.setBool(_keyOnboardingPermissionSkipped, value);
+  }
+
+  bool get hasPendingOnboardingBackupChoice =>
+      _prefs.getBool(_keyOnboardingBackupChoicePending) ?? false;
+
+  Future<void> setOnboardingBackupChoicePending(bool value) async {
+    await _prefs.setBool(_keyOnboardingBackupChoicePending, value);
   }
 
   int? get onlyNewSinceEpoch => _prefs.getInt(_keyOnlyNewSinceEpoch);

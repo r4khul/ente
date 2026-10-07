@@ -60,15 +60,17 @@ Future<void> handleLimitedOrFolderBackupFlow(
 Future<bool?> handleFolderSelectionBackupFlow(
   BuildContext context, {
   bool isFirstBackup = false,
+  bool isOnboarding = false,
   bool fromOnlyNewPhotosToggle = false,
 }) async {
   if (_shouldRunFirstImportFlow()) {
-    return _handleFirstImportFlow(context);
+    return _handleFirstImportFlow(context, isOnboarding: isOnboarding);
   }
 
   return _navigateToFolderSelection(
     context,
     isFirstBackup: isFirstBackup,
+    isOnboarding: isOnboarding,
     fromOnlyNewPhotosToggle: fromOnlyNewPhotosToggle,
   );
 }
@@ -76,7 +78,10 @@ Future<bool?> handleFolderSelectionBackupFlow(
 bool _shouldRunFirstImportFlow() =>
     !LocalSyncService.instance.hasCompletedFirstImport();
 
-Future<bool?> _handleFirstImportFlow(BuildContext context) async {
+Future<bool?> _handleFirstImportFlow(
+  BuildContext context, {
+  bool isOnboarding = false,
+}) async {
   final state = await _requestAndStoreGrantedPermissions();
   if (state == null || !context.mounted) return null;
 
@@ -91,7 +96,10 @@ Future<bool?> _handleFirstImportFlow(BuildContext context) async {
 
   return routeToPage<bool>(
     context,
-    const LoadingPhotosWidget(isOnboardingFlow: false),
+    LoadingPhotosWidget(
+      isOnboardingFlow: false,
+      isBackupOnboarding: isOnboarding,
+    ),
   );
 }
 
@@ -114,11 +122,13 @@ bool _hasMinimalPermission(PermissionState state) =>
 Future<bool?> _navigateToFolderSelection(
   BuildContext context, {
   required bool isFirstBackup,
+  bool isOnboarding = false,
   bool fromOnlyNewPhotosToggle = false,
 }) => routeToPage<bool>(
   context,
   BackupFolderSelectionPage(
     isFirstBackup: isFirstBackup,
+    isOnboarding: isOnboarding,
     fromOnlyNewPhotosToggle: fromOnlyNewPhotosToggle,
   ),
 );

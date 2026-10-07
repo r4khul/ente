@@ -262,9 +262,11 @@ class _EnteAppState extends State<EnteApp> with WidgetsBindingObserver {
       if (_isPickerLaunch) {
         return;
       }
-      unawaited(_reloadCachesUpdatedInBackground(lastAppOpenTime));
+      if (!permissionService.isPhotoPermissionFlowPending) {
+        unawaited(_reloadCachesUpdatedInBackground(lastAppOpenTime));
+        unawaited(BackgroundTasks.configure().catchError((Object _) {}));
+      }
       SyncService.instance.sync();
-      unawaited(BackgroundTasks.configure().catchError((Object _) {}));
       if (Platform.isIOS) {
         MLService.instance.triggerML();
       }

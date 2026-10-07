@@ -1,0 +1,1 @@
+- Kept photo permission and backup choices consistent when returning from Settings or restarting onboarding.

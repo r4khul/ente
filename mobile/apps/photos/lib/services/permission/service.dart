@@ -4,21 +4,59 @@ import "package:shared_preferences/shared_preferences.dart";
 class PermissionService {
   static const kHasGrantedPermissionsKey = "has_granted_permissions";
   static const kPermissionStateKey = "permission_state";
+  static const _kRequestedOfflinePhotoPermission =
+      "requested_offline_photo_permission";
+  static const _kPendingOfflineSettingsGrant = "pending_offline_settings_grant";
   static const _photoLibraryAddRequestOption = PermissionRequestOption(
     iosAccessLevel: IosAccessLevel.addOnly,
   );
   final SharedPreferences _prefs;
+  int _pendingPhotoPermissionRequests = 0;
   PermissionService(this._prefs);
 
-  Future<PermissionState> requestPhotoMangerPermissions() {
-    return PhotoManager.requestPermissionExtend(
-      requestOption: const PermissionRequestOption(
-        androidPermission: AndroidPermission(
-          type: RequestType.common,
-          mediaLocation: true,
+  bool get isPhotoPermissionFlowPending =>
+      _pendingPhotoPermissionRequests > 0 ||
+      (_prefs.getBool(_kPendingOfflineSettingsGrant) ?? false);
+
+  Future<PermissionState> requestPhotoMangerPermissions() async {
+    _pendingPhotoPermissionRequests++;
+    try {
+      return await PhotoManager.requestPermissionExtend(
+        requestOption: const PermissionRequestOption(
+          androidPermission: AndroidPermission(
+            type: RequestType.common,
+            mediaLocation: true,
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      _pendingPhotoPermissionRequests--;
+    }
+  }
+
+  bool get hasRequestedOfflinePhotoPermission =>
+      _prefs.getBool(_kRequestedOfflinePhotoPermission) ?? false;
+
+  Future<PermissionState> requestOfflinePhotoPermissions() async {
+    final state = await requestPhotoMangerPermissions();
+    await _prefs.setBool(_kRequestedOfflinePhotoPermission, true);
+    return state;
+  }
+
+  Future<void> setOfflineSettingsGrantPending(bool value) async {
+    if (value) {
+      await _prefs.setBool(_kPendingOfflineSettingsGrant, true);
+    } else {
+      await _prefs.remove(_kPendingOfflineSettingsGrant);
+    }
+  }
+
+  Future<PermissionState?> getPendingOfflineSettingsGrant() async {
+    if (!(_prefs.getBool(_kPendingOfflineSettingsGrant) ?? false)) return null;
+    final state = await getPermissionState();
+    if (state.hasAccess) return state;
+    await setOfflineSettingsGrantPending(false);
+    return null;
   }
 
   Future<PermissionState> requestPhotoLibraryAddPermission() async {

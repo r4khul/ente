@@ -10,6 +10,7 @@ import 'package:photos/ente_theme_data.dart';
 import 'package:photos/events/local_import_progress.dart';
 import 'package:photos/events/sync_status_update_event.dart';
 import "package:photos/service_locator.dart";
+import "package:photos/services/sync/local_sync_service.dart";
 import 'package:photos/ui/common/bottom_shadow.dart';
 import "package:photos/ui/components/buttons/button_widget.dart";
 import "package:photos/ui/components/dialog_widget.dart";
@@ -19,11 +20,13 @@ import "package:photos/utils/email_util.dart";
 
 class LoadingPhotosWidget extends StatefulWidget {
   final bool isOnboardingFlow;
+  final bool isBackupOnboarding;
   final Widget Function()? onFolderSelectionComplete;
 
   const LoadingPhotosWidget({
     super.key,
     this.isOnboardingFlow = true,
+    this.isBackupOnboarding = false,
     this.onFolderSelectionComplete,
   });
 
@@ -38,6 +41,7 @@ class _LoadingPhotosWidgetState extends State<LoadingPhotosWidget> {
   StreamSubscription<LocalImportProgressEvent>? _importProgressEvent;
   int _currentPage = 0;
   String? _loadingMessage;
+  bool _isOpeningFolderSelection = false;
   final PageController _pageController = PageController(initialPage: 0);
   final List<String> _messages = [];
   late final Timer _didYouKnowTimer;
@@ -64,6 +68,15 @@ class _LoadingPhotosWidgetState extends State<LoadingPhotosWidget> {
       }
     });
 
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted &&
+          LocalSyncService.instance.hasCompletedFirstImport() &&
+          !(widget.isOnboardingFlow &&
+              permissionService.hasGrantedLimitedPermissions())) {
+        unawaited(_goToFolderSelection());
+      }
+    });
+
     _didYouKnowTimer = Timer.periodic(const Duration(seconds: 5), (
       Timer timer,
     ) {
@@ -85,6 +98,8 @@ class _LoadingPhotosWidgetState extends State<LoadingPhotosWidget> {
   }
 
   Future<void> _goToFolderSelection() async {
+    if (_isOpeningFolderSelection || !mounted) return;
+    _isOpeningFolderSelection = true;
     if (widget.isOnboardingFlow) {
       // ignore: unawaited_futures
       routeToPage(
@@ -99,9 +114,9 @@ class _LoadingPhotosWidgetState extends State<LoadingPhotosWidget> {
 
     final selectionResult = await routeToPage<bool>(
       context,
-      const BackupFolderSelectionPage(
-        isOnboarding: false,
-        isFirstBackup: false,
+      BackupFolderSelectionPage(
+        isOnboarding: widget.isBackupOnboarding,
+        isFirstBackup: widget.isBackupOnboarding,
       ),
     );
 

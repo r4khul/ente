@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:io";
 import "dart:math";
 
 import "package:ente_components/ente_components.dart";
@@ -18,6 +19,7 @@ import "package:photos/services/machine_learning/ml_service.dart";
 import "package:photos/services/machine_learning/semantic_search/semantic_search_service.dart";
 import 'package:photos/services/sync/sync_service.dart';
 import "package:photos/theme/ente_theme.dart";
+import "package:photos/ui/common/backup_flow_helper.dart";
 import "package:photos/ui/common/web_page.dart";
 import "package:photos/ui/components/alert_bottom_sheet.dart";
 import "package:photos/ui/components/buttons/button_widget_v2.dart";
@@ -35,28 +37,57 @@ class GrantPermissionsWidget extends StatefulWidget {
   State<GrantPermissionsWidget> createState() => _GrantPermissionsWidgetState();
 }
 
-class _GrantPermissionsWidgetState extends State<GrantPermissionsWidget> {
+class _GrantPermissionsWidgetState extends State<GrantPermissionsWidget>
+    with WidgetsBindingObserver {
   final Logger _logger = Logger("_GrantPermissionsWidgetState");
   final Debouncer _onlyNewActionDebouncer = Debouncer(
     const Duration(milliseconds: 500),
     leading: true,
   );
   late final rive.FileLoader _permissionsAnimationLoader;
+  bool _isWaitingForSettings = false;
+  bool _isActivatingLocalGallery = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _permissionsAnimationLoader = rive.FileLoader.fromAsset(
       "assets/home_tab.riv",
       riveFactory: rive.Factory.flutter,
     );
+    if (widget.startWithoutAccount) {
+      unawaited(_checkOfflinePermission());
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _permissionsAnimationLoader.dispose();
     _onlyNewActionDebouncer.cancelDebounceTimer();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _isWaitingForSettings) {
+      _isWaitingForSettings = false;
+      unawaited(_checkOfflinePermission());
+    }
+  }
+
+  Future<void> _checkOfflinePermission() async {
+    try {
+      final state = await permissionService.getPermissionState();
+      if (mounted && state.hasAccess) {
+        await _activateLocalGallery(state);
+      } else if (mounted) {
+        await permissionService.setOfflineSettingsGrantPending(false);
+      }
+    } catch (e, s) {
+      _logger.severe("Failed to check photo permission after Settings", e, s);
+    }
   }
 
   @override
@@ -190,6 +221,22 @@ class _GrantPermissionsWidgetState extends State<GrantPermissionsWidget> {
       _logger.info("Permission state: $state");
       if (state == PermissionState.authorized ||
           state == PermissionState.limited) {
+        if (backupPreferenceService.hasPendingOnboardingBackupChoice) {
+          await permissionService.onUpdatePermission(state);
+          if (!mounted) return;
+          final selected = await handleFolderSelectionBackupFlow(
+            context,
+            isFirstBackup: true,
+            isOnboarding: true,
+          );
+          if (selected == null) return;
+          if (selected) {
+            await onPermissionGranted(state, shouldMarkLimitedFolders: false);
+          } else {
+            await _onTapSkip();
+          }
+          return;
+        }
         await onPermissionGranted(state);
       } else {
         await _showPermissionDeniedDialog();
@@ -203,39 +250,68 @@ class _GrantPermissionsWidgetState extends State<GrantPermissionsWidget> {
 
   Future<void> _onTapOfflineGrantPermission() async {
     try {
-      final state = await permissionService.requestPhotoMangerPermissions();
+      final previousState = await permissionService.getPermissionState();
+      if (!mounted) return;
+      if (previousState == PermissionState.denied &&
+          (Platform.isIOS ||
+              permissionService.hasRequestedOfflinePhotoPermission)) {
+        await permissionService.setOfflineSettingsGrantPending(true);
+        if (!mounted) return;
+        _isWaitingForSettings = true;
+        await PhotoManager.openSetting();
+        return;
+      }
+      final state = await permissionService.requestOfflinePhotoPermissions();
+      if (!mounted) return;
       _logger.info("Offline permission state: $state");
       if (state == PermissionState.authorized ||
           state == PermissionState.limited) {
-        await localSettings.setAppMode(AppMode.localGallery);
-        localSettings.localGalleryModeEnabledThisSession = true;
-        Bus.instance.fire(AppModeChangedEvent());
-        await permissionService.onUpdatePermission(state);
-        SyncService.instance.onPermissionGranted().ignore();
-        Bus.instance.fire(PermissionGrantedEvent());
-        try {
-          await setMLConsent(true);
-          await MLService.instance.init();
-          await SemanticSearchService.instance.init();
-          unawaited(MLService.instance.runAllML(force: true));
-        } catch (e) {
-          _logger.severe("Failed to initialize ML after permission grant", e);
-        }
-      } else {
-        await _showPermissionDeniedDialog();
+        await _activateLocalGallery(state);
       }
     } catch (e) {
       _logger.severe("Failed to request permission: ${e.toString()}", e);
     }
   }
 
+  Future<void> _activateLocalGallery(PermissionState state) async {
+    if (_isActivatingLocalGallery) return;
+    _isActivatingLocalGallery = true;
+    try {
+      await permissionService.onUpdatePermission(state);
+      await localSettings.setAppMode(AppMode.localGallery);
+      await permissionService.setOfflineSettingsGrantPending(false);
+      localSettings.localGalleryModeEnabledThisSession = true;
+      Bus.instance.fire(AppModeChangedEvent());
+      SyncService.instance.onPermissionGranted().ignore();
+      Bus.instance.fire(PermissionGrantedEvent());
+      try {
+        await setMLConsent(true);
+        await MLService.instance.init();
+        await SemanticSearchService.instance.init();
+        unawaited(MLService.instance.runAllML(force: true));
+      } catch (e) {
+        _logger.severe("Failed to initialize ML after permission grant", e);
+      }
+    } finally {
+      _isActivatingLocalGallery = false;
+    }
+  }
+
   Future<void> _onTapSkip() async {
     await backupPreferenceService.setOnboardingPermissionSkipped(true);
+    await _completeBackupChoice();
     SyncService.instance.sync().ignore();
     if (mounted) {
       setState(() {});
     }
     Bus.instance.fire(PermissionGrantedEvent());
+  }
+
+  Future<void> _completeBackupChoice() async {
+    if (backupPreferenceService.hasPendingOnboardingBackupChoice) {
+      await localSettings.setIsFromLocalGalleryToEnte(false);
+      await backupPreferenceService.setOnboardingBackupChoicePending(false);
+    }
   }
 
   Future<void> _showPermissionDeniedDialog() async {
@@ -269,6 +345,7 @@ class _GrantPermissionsWidgetState extends State<GrantPermissionsWidget> {
     _logger.info("Permission granted " + state.toString());
     await permissionService.onUpdatePermission(state);
     await backupPreferenceService.setOnboardingPermissionSkipped(false);
+    await _completeBackupChoice();
     if (shouldMarkLimitedFolders && state == PermissionState.limited) {
       await backupPreferenceService.setSelectAllFoldersForBackup(true);
     }

@@ -182,6 +182,8 @@ class _HomeWidgetState extends State<HomeWidget> {
     _logger.info("initstate");
     super.initState();
 
+    unawaited(_resumeOfflineGalleryFromSettings());
+
     NotificationService.instance
         .initialize(_onDidReceiveNotificationResponse)
         .ignore();
@@ -361,6 +363,20 @@ class _HomeWidgetState extends State<HomeWidget> {
         _handleMissingRecoveryKey();
       }
     });
+  }
+
+  Future<void> _resumeOfflineGalleryFromSettings() async {
+    if (Configuration.instance.hasConfiguredAccount()) return;
+    try {
+      final state = await permissionService.getPendingOfflineSettingsGrant();
+      if (mounted &&
+          state != null &&
+          !Configuration.instance.hasConfiguredAccount()) {
+        setState(() => _startWithoutAccount = true);
+      }
+    } catch (e, s) {
+      _logger.warning("Failed to resume photo permission from Settings", e, s);
+    }
   }
 
   Future<void> syncWidget() async {
@@ -857,8 +873,10 @@ class _HomeWidgetState extends State<HomeWidget> {
           final isStartWithoutAccountFlow =
               _startWithoutAccount &&
               !Configuration.instance.hasConfiguredAccount() &&
-              !localSettings.isAppModeSet;
+              !permissionService.hasGrantedPermissions();
           if (isStartWithoutAccountFlow) {
+            await permissionService.setOfflineSettingsGrantPending(false);
+            if (!mounted) return;
             setState(() {
               _startWithoutAccount = false;
             });
@@ -1354,8 +1372,10 @@ class _HomeWidgetState extends State<HomeWidget> {
   }
 
   bool _shouldShowPermissionWidget() {
-    return !permissionService.hasGrantedPermissions() &&
-        !backupPreferenceService.hasSkippedOnboardingPermission;
+    return (Configuration.instance.hasConfiguredAccount() &&
+            backupPreferenceService.hasPendingOnboardingBackupChoice) ||
+        (!permissionService.hasGrantedPermissions() &&
+            !backupPreferenceService.hasSkippedOnboardingPermission);
   }
 
   bool _shouldShowLoadingWidget() {

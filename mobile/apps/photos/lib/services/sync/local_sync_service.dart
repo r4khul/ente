@@ -81,15 +81,15 @@ class LocalSyncService {
       return;
     }
     if (Platform.isAndroid && AppLifecycleService.instance.isForeground) {
-      final permissionState = await permissionService
-          .requestPhotoMangerPermissions();
-      if (permissionState != PermissionState.authorized) {
+      final permissionState = await permissionService.getPermissionState();
+      if (!permissionState.hasAccess) {
         _logger.warning(
           "Skipping local sync because Android gallery permission is "
           "$permissionState",
         );
         return;
       }
+      await permissionService.onUpdatePermission(permissionState);
     }
     _registerChangeCallback();
     if (_existingSync != null) {
