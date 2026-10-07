@@ -253,7 +253,7 @@ class _PasswordReentryPageState extends State<PasswordReentryPage> {
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (BuildContext context) {
-                            return const RecoveryPage();
+                            return const RecoveryPage(isForgotPassword: true);
                           },
                         ),
                       );
