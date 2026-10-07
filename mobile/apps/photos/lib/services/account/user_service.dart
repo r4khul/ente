@@ -112,7 +112,10 @@ class UserService {
     bool isChangeEmail = false,
     bool isCreateAccountScreen = false,
     bool isResetPasswordScreen = false,
+    bool isForgotPassword = false,
     String? purpose,
+    bool isResend = false,
+    VoidCallback? onChangeEmail,
   }) async {
     final dialog = createProgressDialog(context, context.strings.pleaseWait);
     await dialog.show();
@@ -124,7 +127,7 @@ class UserService {
         isMobile: Platform.isIOS || Platform.isAndroid,
       );
       await dialog.hide();
-      if (!context.mounted) return;
+      if (!context.mounted || isResend) return;
       unawaited(
         Navigator.of(context).push(
           MaterialPageRoute(
@@ -134,6 +137,9 @@ class UserService {
                 isChangeEmail: isChangeEmail,
                 isCreateAccountScreen: isCreateAccountScreen,
                 isResetPasswordScreen: isResetPasswordScreen,
+                isForgotPassword: isForgotPassword,
+                purpose: purpose,
+                onChangeEmail: onChangeEmail,
               );
             },
           ),
@@ -422,6 +428,7 @@ class UserService {
     BuildContext context,
     String ott, {
     bool isResettingPasswordScreen = false,
+    bool isForgotPassword = false,
   }) async {
     final dialog = createProgressDialog(context, context.strings.pleaseWait);
     await dialog.show();
@@ -453,7 +460,7 @@ class UserService {
         await _saveConfiguration(responseData);
         if (Configuration.instance.getEncryptedToken() != null) {
           if (isResettingPasswordScreen) {
-            page = const RecoveryPage();
+            page = RecoveryPage(isForgotPassword: isForgotPassword);
           } else {
             page = const PasswordReentryPage();
           }
