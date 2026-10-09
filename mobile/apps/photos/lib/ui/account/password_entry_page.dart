@@ -12,6 +12,7 @@ import 'package:photos/events/account_configured_event.dart';
 import 'package:photos/events/subscription_purchased_event.dart';
 import "package:photos/gateways/users/models/key_gen_result.dart";
 import 'package:photos/services/account/user_service.dart';
+import "package:photos/ui/account/onboarding_page_scaffold.dart";
 import 'package:photos/ui/account/recovery_key_page.dart';
 import 'package:photos/ui/common/web_page.dart';
 import "package:photos/ui/components/alert_bottom_sheet.dart";
@@ -87,6 +88,14 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
 
     final isFormValid = _passwordsMatch && _isPasswordValid;
 
+    if (_volatilePassword != null) {
+      return OnboardingPageScaffold(
+        title: title,
+        illustration: OnboardingIllustration.recoveryKey,
+        body: const SizedBox.shrink(),
+      );
+    }
+
     return Scaffold(
       resizeToAvoidBottomInset: true,
       backgroundColor: colors.backgroundBase,
@@ -109,9 +118,7 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
         ),
         centerTitle: true,
       ),
-      body: _volatilePassword != null
-          ? const SizedBox.shrink()
-          : _getBody(title: title, isFormValid: isFormValid),
+      body: _getBody(title: title, isFormValid: isFormValid),
     );
   }
 

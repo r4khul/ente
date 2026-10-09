@@ -8,6 +8,7 @@ import "package:logging/logging.dart";
 import 'package:photos/core/configuration.dart';
 import "package:photos/gateways/users/models/srp.dart";
 import "package:photos/services/account/user_service.dart";
+import "package:photos/ui/account/onboarding_page_scaffold.dart";
 import "package:photos/ui/components/buttons/button_widget.dart"
     show ButtonAction;
 import "package:photos/utils/dialog_util.dart";
@@ -28,6 +29,7 @@ class _LoginPasswordVerificationPageState
   final _passwordController = TextEditingController();
   String? email;
   bool _hasPassword = false;
+  bool _isPasswordIncorrect = false;
   final Logger _logger = Logger("LoginPasswordVerificationPage");
 
   @override
@@ -48,39 +50,19 @@ class _LoginPasswordVerificationPageState
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.componentColors;
-
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      backgroundColor: colors.backgroundBase,
-      appBar: AppBar(
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        backgroundColor: colors.backgroundBase,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          color: colors.iconColor,
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-        ),
-        title: Text(
-          context.strings.enterPassword,
-          style: TextStyles.large.copyWith(color: colors.textBase),
-        ),
-        centerTitle: true,
-      ),
+    return OnboardingPageScaffold(
+      title: context.strings.enterPassword,
+      illustration: OnboardingIllustration.password,
       body: _getBody(),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: ButtonComponent(
+      actions: [
+        ButtonComponent(
           key: const ValueKey("verifyPasswordButton"),
           label: context.strings.logInLabel,
+          shouldShowSuccessState: false,
           isDisabled: !_hasPassword,
           onTap: _verifyEnteredPassword,
         ),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      ],
     );
   }
 
@@ -94,10 +76,10 @@ class _LoginPasswordVerificationPageState
 
   Widget _getBody() {
     return AutofillGroup(
-      child: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 24),
           Visibility(
             visible: false,
             child: TextFormField(
@@ -119,21 +101,28 @@ class _LoginPasswordVerificationPageState
             autofocus: true,
             shouldUnfocusOnClearOrSubmit: true,
             onSubmit: (_) => _verifyEnteredPassword(),
+            message: _isPasswordIncorrect
+                ? context.strings.incorrectPasswordTitle
+                : null,
+            messageType: _isPasswordIncorrect
+                ? TextInputComponentMessageType.alert
+                : TextInputComponentMessageType.helper,
             onChanged: (value) {
               final hasPassword = value.isNotEmpty;
-              if (_hasPassword != hasPassword) {
+              if (_hasPassword != hasPassword || _isPasswordIncorrect) {
                 setState(() {
                   _hasPassword = hasPassword;
+                  _isPasswordIncorrect = false;
                 });
               }
             },
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: Spacing.md),
           Align(
             alignment: Alignment.centerRight,
             child: ButtonComponent(
               variant: ButtonComponentVariant.link,
-              label: context.strings.forgotPassword,
+              label: context.strings.forgotPasswordPrompt,
               size: ButtonComponentSize.small,
               onTap: () async {
                 await UserService.instance.sendOtt(
@@ -176,12 +165,10 @@ class _LoginPasswordVerificationPageState
       await dialog.hide();
       if (e.response != null && e.response!.statusCode == 401) {
         _logger.severe('server reject, failed verify SRP login', e, s);
-        if (!context.mounted) return;
-        await _showContactSupportDialog(
-          context,
-          context.strings.incorrectPasswordTitle,
-          context.strings.pleaseTryAgain,
-        );
+        if (!mounted) return;
+        setState(() {
+          _isPasswordIncorrect = true;
+        });
       } else {
         _logger.severe('API failure during SRP login ${e.type}', e, s);
         if (e.type == DioExceptionType.connectionTimeout ||
