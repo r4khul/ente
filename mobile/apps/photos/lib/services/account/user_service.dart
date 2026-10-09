@@ -492,8 +492,7 @@ class UserService {
         Navigator.of(context).pop();
       } else {
         if (!context.mounted) return;
-        // ignore: unawaited_futures
-        showAlertBottomSheet(
+        await showAlertBottomSheet(
           context,
           title: context.strings.incorrectCode,
           message: context.strings.sorryTheCodeYouveEnteredIsIncorrect,
@@ -504,8 +503,7 @@ class UserService {
       await dialog.hide();
       _logger.warning(e);
       if (!context.mounted) return;
-      // ignore: unawaited_futures
-      showAlertBottomSheet(
+      await showAlertBottomSheet(
         context,
         title: context.strings.oops,
         message: context.strings.verificationFailedPleaseTryAgain,
@@ -550,8 +548,7 @@ class UserService {
       await dialog.hide();
       if (e.response != null && e.response!.statusCode == 403) {
         if (!context.mounted) return;
-        // ignore: unawaited_futures
-        showAlertBottomSheet(
+        await showAlertBottomSheet(
           context,
           title: context.strings.oops,
           message: context.strings.thisEmailIsAlreadyInUse,
@@ -559,8 +556,7 @@ class UserService {
         );
       } else {
         if (!context.mounted) return;
-        // ignore: unawaited_futures
-        showAlertBottomSheet(
+        await showAlertBottomSheet(
           context,
           title: context.strings.incorrectCode,
           message: context.strings.authenticationFailedPleaseTryAgain,
@@ -571,8 +567,7 @@ class UserService {
       await dialog.hide();
       _logger.warning(e);
       if (!context.mounted) return;
-      // ignore: unawaited_futures
-      showAlertBottomSheet(
+      await showAlertBottomSheet(
         context,
         title: context.strings.oops,
         message: context.strings.verificationFailedPleaseTryAgain,
@@ -859,8 +854,7 @@ class UserService {
         );
       } else {
         if (!context.mounted) return;
-        // ignore: unawaited_futures
-        showAlertBottomSheet(
+        await showAlertBottomSheet(
           context,
           title: context.strings.incorrectCode,
           message: context.strings.authenticationFailedPleaseTryAgain,
@@ -871,8 +865,7 @@ class UserService {
       await dialog.hide();
       _logger.severe(e);
       if (!context.mounted) return;
-      // ignore: unawaited_futures
-      showAlertBottomSheet(
+      await showAlertBottomSheet(
         context,
         title: context.strings.oops,
         message: context.strings.authenticationFailedPleaseTryAgain,

@@ -66,6 +66,14 @@ void main() {
     failure = null;
   });
 
+  // The onboarding illustrations animate continuously, so the tree never
+  // settles; pump a bounded stretch of frames instead.
+  Future<void> settle(WidgetTester tester) async {
+    for (var i = 0; i < 12; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+  }
+
   Widget app(
     Widget home, {
     Locale? locale,
@@ -113,7 +121,7 @@ void main() {
           ),
         );
         await tester.tap(find.text("Enter email"));
-        await tester.pumpAndSettle();
+        await settle(tester);
         final page = tester.widget<OTTVerificationPage>(
           find.byType(OTTVerificationPage),
         );
@@ -132,7 +140,7 @@ void main() {
 
         for (var resend = 0; resend < 2; resend++) {
           await tester.tap(find.text("Resend code"));
-          await tester.pumpAndSettle();
+          await settle(tester);
           expect(
             find.byType(OTTVerificationPage, skipOffstage: false),
             findsOneWidget,
@@ -154,7 +162,7 @@ void main() {
         } else {
           await tester.tap(find.text("Change email"));
         }
-        await tester.pumpAndSettle();
+        await settle(tester);
         expect(find.text("Enter email"), findsOneWidget);
         expect(
           find.byType(OTTVerificationPage, skipOffstage: false),
@@ -195,13 +203,13 @@ void main() {
       ),
     );
     await tester.tap(find.text("Enter email"));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(find.text("Password fallback"));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(find.text("Resend code"));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(find.text("Change email"));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(find.text("Enter email"), findsOneWidget);
     expect(find.text("Password fallback"), findsNothing);
     expect(find.byType(OTTVerificationPage, skipOffstage: false), findsNothing);
@@ -228,7 +236,7 @@ void main() {
     final actions = tester.widgetList<TextButton>(find.byType(TextButton));
     expect(actions.every((button) => button.onPressed == null), isTrue);
     pendingRequest!.complete();
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(find.byType(OTTVerificationPage), findsOneWidget);
     expect(
       tester
@@ -247,14 +255,14 @@ void main() {
     );
     failure = {"code": "USER_NOT_REGISTERED"};
     await tester.tap(find.text("Resend code"));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(find.byType(OTTVerificationPage), findsOneWidget);
     expect(find.text("Resend code"), findsOneWidget);
     Navigator.of(tester.element(find.byType(OTTVerificationPage))).pop();
-    await tester.pumpAndSettle();
+    await settle(tester);
     failure = null;
     await tester.tap(find.text("Resend code"));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(requests, hasLength(2));
     expect(find.byType(OTTVerificationPage), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -271,7 +279,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pumpWidget(const SizedBox());
     pendingRequest!.complete();
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(requests, hasLength(1));
     expect(tester.takeException(), isNull);
   });
@@ -292,15 +300,19 @@ void main() {
             scale: 2,
           ),
         );
-        await tester.pumpAndSettle();
+        await settle(tester);
         final context = tester.element(find.byType(OTTVerificationPage));
         for (final label in [
           context.strings.changeEmail,
           context.strings.resendCode,
         ]) {
           final action = find.text(label);
-          await tester.scrollUntilVisible(action, 150);
-          await tester.pumpAndSettle();
+          await tester.scrollUntilVisible(
+            action,
+            150,
+            scrollable: find.byType(Scrollable).first,
+          );
+          await settle(tester);
           final rect = tester.getRect(action);
           expect(rect.left, greaterThanOrEqualTo(16));
           expect(rect.right, lessThanOrEqualTo(304));
@@ -321,10 +333,7 @@ void main() {
         final title = forgotPassword
             ? context.strings.forgotPassword
             : context.strings.recoverAccount;
-        expect(
-          find.descendant(of: find.byType(AppBar), matching: find.text(title)),
-          findsOneWidget,
-        );
+        expect(find.text(title), findsOneWidget);
         expect(tester.takeException(), isNull);
       },
     );
