@@ -1,0 +1,1 @@
+- Polished sign-up and login screens with clearer titles, explicit terms acceptance, and improved verification actions.
