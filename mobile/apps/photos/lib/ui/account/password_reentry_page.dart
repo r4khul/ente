@@ -12,12 +12,12 @@ import 'package:photos/core/event_bus.dart';
 import 'package:photos/events/subscription_purchased_event.dart';
 import "package:photos/service_locator.dart";
 import "package:photos/services/account/user_service.dart";
+import "package:photos/ui/account/onboarding_page_scaffold.dart";
 import 'package:photos/ui/account/recovery_page.dart';
 import 'package:photos/ui/components/buttons/button_widget.dart'
     show ButtonAction;
 import 'package:photos/ui/tabs/home_widget.dart';
 import 'package:photos/utils/dialog_util.dart';
-import 'package:photos/utils/email_util.dart';
 
 class PasswordReentryPage extends StatefulWidget {
   const PasswordReentryPage({super.key});
@@ -31,6 +31,7 @@ class _PasswordReentryPageState extends State<PasswordReentryPage> {
   final _passwordController = TextEditingController();
   String? email;
   String? _volatilePassword;
+  bool _isPasswordIncorrect = false;
 
   @override
   void initState() {
@@ -51,40 +52,21 @@ class _PasswordReentryPageState extends State<PasswordReentryPage> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.componentColors;
     final isFormValid = _passwordController.text.isNotEmpty;
 
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      backgroundColor: colors.backgroundBase,
-      appBar: AppBar(
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        backgroundColor: colors.backgroundBase,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          color: colors.iconColor,
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-        ),
-        title: Text(
-          context.strings.enterPassword,
-          style: TextStyles.large.copyWith(color: colors.textBase),
-        ),
-        centerTitle: true,
-      ),
+    return OnboardingPageScaffold(
+      title: context.strings.enterPassword,
+      illustration: OnboardingIllustration.password,
       body: _getBody(),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: ButtonComponent(
+      actions: [
+        ButtonComponent(
           key: const ValueKey("verifyPasswordButton"),
           label: context.strings.logInLabel,
+          shouldShowSuccessState: false,
           isDisabled: !isFormValid,
           onTap: isFormValid ? _onVerifyPasswordPressed : null,
         ),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      ],
     );
   }
 
@@ -133,22 +115,9 @@ class _PasswordReentryPageState extends State<PasswordReentryPage> {
       _logger.warning("Password verification failed: $e");
       await dialog.hide();
       if (!mounted) return;
-      final dialogChoice = await showChoiceDialog(
-        context,
-        title: context.strings.incorrectPasswordTitle,
-        body: context.strings.pleaseTryAgain,
-        firstButtonLabel: context.strings.contactSupport,
-        secondButtonLabel: context.strings.ok,
-      );
-      if (dialogChoice?.action == ButtonAction.first) {
-        if (!mounted) return;
-        await sendLogs(
-          context,
-          context.strings.contactSupport,
-          "support@ente.com",
-          postShare: () {},
-        );
-      }
+      setState(() {
+        _isPasswordIncorrect = true;
+      });
       return;
     }
     await dialog.hide();
@@ -189,81 +158,84 @@ class _PasswordReentryPageState extends State<PasswordReentryPage> {
   }
 
   Widget _getBody() {
-    return SafeArea(
-      child: AutofillGroup(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return AutofillGroup(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Visibility(
+            // Give autofill the account email to pair with the password.
+            visible: false,
+            child: TextFormField(
+              autofillHints: const [AutofillHints.email],
+              autocorrect: false,
+              keyboardType: TextInputType.emailAddress,
+              initialValue: email,
+              textInputAction: TextInputAction.next,
+            ),
+          ),
+          TextInputComponent(
+            key: const ValueKey("passwordInputField"),
+            label: context.strings.password,
+            isRequired: true,
+            hintText: context.strings.enterYourPassword,
+            controller: _passwordController,
+            isPasswordInput: true,
+            autocorrect: false,
+            shouldUnfocusOnClearOrSubmit: true,
+            onSubmit: _passwordController.text.isNotEmpty
+                ? (_) => _onVerifyPasswordPressed()
+                : null,
+            message: _isPasswordIncorrect
+                ? context.strings.incorrectPasswordTitle
+                : null,
+            messageType: _isPasswordIncorrect
+                ? TextInputComponentMessageType.alert
+                : TextInputComponentMessageType.helper,
+            onChanged: (value) {
+              setState(() {
+                _isPasswordIncorrect = false;
+              });
+            },
+          ),
+          const SizedBox(height: Spacing.md),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const SizedBox(height: 12),
-              Visibility(
-                // Give autofill the account email to pair with the password.
-                visible: false,
-                child: TextFormField(
-                  autofillHints: const [AutofillHints.email],
-                  autocorrect: false,
-                  keyboardType: TextInputType.emailAddress,
-                  initialValue: email,
-                  textInputAction: TextInputAction.next,
-                ),
-              ),
-              TextInputComponent(
-                key: const ValueKey("passwordInputField"),
-                label: context.strings.password,
-                isRequired: true,
-                hintText: context.strings.enterYourPassword,
-                controller: _passwordController,
-                isPasswordInput: true,
-                autocorrect: false,
-                shouldUnfocusOnClearOrSubmit: true,
-                onSubmit: _passwordController.text.isNotEmpty
-                    ? (_) => _onVerifyPasswordPressed()
-                    : null,
-                onChanged: (value) {
-                  setState(() {});
+              ButtonComponent(
+                variant: ButtonComponentVariant.link,
+                label: context.strings.changeEmail,
+                size: ButtonComponentSize.small,
+                onTap: () async {
+                  final dialog = createProgressDialog(
+                    context,
+                    context.strings.pleaseWait,
+                  );
+                  await dialog.show();
+                  await Configuration.instance.logout();
+                  await dialog.hide();
+                  if (!mounted) return;
+                  Navigator.of(context).popUntil((route) => route.isFirst);
                 },
               ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  ButtonComponent(
-                    variant: ButtonComponentVariant.link,
-                    label: context.strings.changeEmail,
-                    size: ButtonComponentSize.small,
-                    onTap: () async {
-                      final dialog = createProgressDialog(
-                        context,
-                        context.strings.pleaseWait,
-                      );
-                      await dialog.show();
-                      await Configuration.instance.logout();
-                      await dialog.hide();
-                      if (!mounted) return;
-                      Navigator.of(context).popUntil((route) => route.isFirst);
-                    },
-                  ),
-                  ButtonComponent(
-                    variant: ButtonComponentVariant.link,
-                    label: context.strings.forgotPassword,
-                    size: ButtonComponentSize.small,
-                    onTap: () async {
-                      // ignore: unawaited_futures
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (BuildContext context) {
-                            return const RecoveryPage();
-                          },
-                        ),
-                      );
-                    },
-                  ),
-                ],
+              ButtonComponent(
+                variant: ButtonComponentVariant.link,
+                label: context.strings.forgotPasswordPrompt,
+                size: ButtonComponentSize.small,
+                onTap: () async {
+                  // ignore: unawaited_futures
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (BuildContext context) {
+                        return const RecoveryPage(isForgotPassword: true);
+                      },
+                    ),
+                  );
+                },
               ),
             ],
           ),
-        ),
+        ],
       ),
     );
   }

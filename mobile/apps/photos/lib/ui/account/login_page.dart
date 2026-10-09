@@ -12,7 +12,7 @@ import "package:photos/gateways/users/models/srp.dart";
 import 'package:photos/services/account/user_service.dart';
 import "package:photos/ui/account/email_entry_page.dart";
 import "package:photos/ui/account/login_pwd_verification_page.dart";
-import "package:photos/ui/settings/developer_settings_tap_area.dart";
+import "package:photos/ui/account/onboarding_page_scaffold.dart";
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -56,86 +56,73 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.componentColors;
-    final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      backgroundColor: colors.backgroundBase,
-      appBar: AppBar(
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        backgroundColor: colors.backgroundBase,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          color: colors.iconColor,
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-        ),
-        title: DeveloperSettingsTapArea(
-          behavior: HitTestBehavior.translucent,
-          child: Text(
-            context.strings.loginToEnte,
-            style: TextStyles.large.copyWith(color: colors.textBase),
-          ),
-        ),
-        centerTitle: true,
-      ),
+    return OnboardingPageScaffold(
+      title: context.strings.loginToEnte,
+      illustration: OnboardingIllustration.login,
+      showDeveloperSettingsTapArea: true,
       body: _getBody(),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: ButtonComponent(
+      actions: [
+        ButtonComponent(
           key: const ValueKey("logInButton"),
           label: context.strings.continueLabel,
+          shouldShowSuccessState: false,
           isDisabled: !_emailIsValid,
           onTap: _emailIsValid ? _submitLoginEmail : null,
         ),
-      ),
-      bottomNavigationBar: isKeyboardOpen ? null : const _SignUpPrompt(),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+        OnboardingAccountPrompt(
+          question: context.strings.dontHaveAnAccount,
+          actionLabel: context.strings.signUp,
+          onTap: () async {
+            FocusScope.of(context).unfocus();
+            await Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const EmailEntryPage()));
+          },
+        ),
+      ],
     );
   }
 
   Widget _getBody() {
     return AutofillGroup(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 20),
-            TextInputComponent(
-              key: const ValueKey("emailInputField"),
-              label: context.strings.email,
-              hintText: context.strings.emailHint,
-              controller: _emailController,
-              keyboardType: TextInputType.emailAddress,
-              autofillHints: const [AutofillHints.email],
-              autocorrect: false,
-              autofocus: true,
-              isRequired: true,
-              shouldUnfocusOnClearOrSubmit: true,
-              onSubmit: (_) => _submitLoginEmail(),
-              onChanged: _onEmailChanged,
-              message: _showValidationMessage && !_emailIsValid
-                  ? context.strings.invalidEmailAddress
-                  : null,
-              messageType: _showValidationMessage && !_emailIsValid
-                  ? TextInputComponentMessageType.alert
-                  : TextInputComponentMessageType.helper,
-            ),
-            const SizedBox(height: 24),
-            const Expanded(child: DeveloperSettingsTapArea()),
-          ],
-        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextInputComponent(
+            key: const ValueKey("emailInputField"),
+            label: context.strings.email,
+            hintText: context.strings.emailHint,
+            controller: _emailController,
+            keyboardType: TextInputType.emailAddress,
+            autofillHints: const [AutofillHints.email],
+            autocorrect: false,
+            autofocus: true,
+            isRequired: true,
+            shouldUnfocusOnClearOrSubmit: true,
+            onSubmit: (_) => _submitLoginEmail(),
+            onChanged: _onEmailChanged,
+            message: _showValidationMessage
+                ? _emailIsValid
+                      ? context.strings.validEmailAddress
+                      : context.strings.invalidEmailAddress
+                : null,
+            messageType: !_showValidationMessage
+                ? TextInputComponentMessageType.helper
+                : _emailIsValid
+                ? TextInputComponentMessageType.success
+                : TextInputComponentMessageType.alert,
+          ),
+        ],
       ),
     );
   }
 
   void _onEmailChanged(String value) {
+    final trimmed = value.trim();
+    if (trimmed == _email) return;
     _validationTimer?.cancel();
 
-    final trimmed = value.trim();
     final isValid = EmailValidator.validate(trimmed);
 
     setState(() {
@@ -204,42 +191,5 @@ class _LoginPageState extends State<LoginPage> {
     }
     if (!mounted) return;
     FocusScope.of(context).unfocus();
-  }
-}
-
-class _SignUpPrompt extends StatelessWidget {
-  const _SignUpPrompt();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.componentColors;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              context.strings.dontHaveAnAccount,
-              style: TextStyles.body.copyWith(color: colors.textLight),
-            ),
-            const SizedBox(width: 4),
-            ButtonComponent(
-              label: context.strings.signUp,
-              variant: ButtonComponentVariant.link,
-              size: ButtonComponentSize.small,
-              shouldSurfaceExecutionStates: false,
-              onTap: () async {
-                FocusScope.of(context).unfocus();
-                await Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const EmailEntryPage()),
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
