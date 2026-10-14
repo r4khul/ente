@@ -162,7 +162,7 @@ class _PasskeyPageState extends State<PasskeyPage> {
           },
         ),
         title: Text(
-          context.strings.passkey,
+          context.strings.passkeyAuthTitle,
           style: TextStyles.large.copyWith(color: colors.textBase),
         ),
         centerTitle: true,
@@ -181,9 +181,22 @@ class _PasskeyPageState extends State<PasskeyPage> {
             const Spacer(),
             Text(
               context.strings.waitingForVerification,
-              style: TextStyles.body.copyWith(color: colors.textLight),
+              style: TextStyles.body.copyWith(color: colors.textBase),
               textAlign: TextAlign.center,
             ),
+            if (widget.totp2FASessionID.isNotEmpty)
+              ButtonComponent(
+                label: context.strings.useTwoFactorInstead,
+                variant: ButtonComponentVariant.link,
+                size: ButtonComponentSize.small,
+                onTap: () async {
+                  // ignore: unawaited_futures
+                  routeToPage(
+                    context,
+                    TwoFactorAuthenticationPage(widget.totp2FASessionID),
+                  );
+                },
+              ),
             const Spacer(),
             ButtonComponent(
               label: context.strings.tryAgain,
@@ -207,21 +220,6 @@ class _PasskeyPageState extends State<PasskeyPage> {
                 }
               },
             ),
-            if (widget.totp2FASessionID.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              ButtonComponent(
-                label: context.strings.loginWithTOTP,
-                variant: ButtonComponentVariant.link,
-                size: ButtonComponentSize.small,
-                onTap: () async {
-                  // ignore: unawaited_futures
-                  routeToPage(
-                    context,
-                    TwoFactorAuthenticationPage(widget.totp2FASessionID),
-                  );
-                },
-              ),
-            ],
             const SizedBox(height: 12),
             ButtonComponent(
               label: context.strings.recoverAccount,

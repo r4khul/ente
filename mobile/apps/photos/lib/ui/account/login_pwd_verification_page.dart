@@ -65,7 +65,7 @@ class _LoginPasswordVerificationPageState
           },
         ),
         title: Text(
-          context.strings.logInLabel,
+          context.strings.enterPassword,
           style: TextStyles.large.copyWith(color: colors.textBase),
         ),
         centerTitle: true,
@@ -140,6 +140,7 @@ class _LoginPasswordVerificationPageState
                   context,
                   email!,
                   isResetPasswordScreen: true,
+                  isForgotPassword: true,
                 );
               },
             ),
@@ -147,6 +148,10 @@ class _LoginPasswordVerificationPageState
         ],
       ),
     );
+  }
+
+  void _returnToEmailEntry() {
+    if (mounted) Navigator.of(context).pop();
   }
 
   Future<void> verifyPassword(BuildContext context, String password) async {
@@ -207,6 +212,7 @@ class _LoginPasswordVerificationPageState
           context,
           email!,
           isCreateAccountScreen: true,
+          onChangeEmail: _returnToEmailEntry,
         );
         return;
       } else if (e is KeyDerivationError) {

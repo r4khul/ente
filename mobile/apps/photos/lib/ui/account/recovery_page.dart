@@ -8,7 +8,9 @@ import 'package:photos/ui/notification/toast.dart';
 import 'package:photos/utils/dialog_util.dart';
 
 class RecoveryPage extends StatefulWidget {
-  const RecoveryPage({super.key});
+  final bool isForgotPassword;
+
+  const RecoveryPage({this.isForgotPassword = false, super.key});
 
   @override
   State<RecoveryPage> createState() => _RecoveryPageState();
@@ -43,7 +45,9 @@ class _RecoveryPageState extends State<RecoveryPage> {
           },
         ),
         title: Text(
-          context.strings.recoverAccount,
+          widget.isForgotPassword
+              ? context.strings.forgotPassword
+              : context.strings.recoverAccount,
           style: TextStyles.large.copyWith(color: colors.textBase),
         ),
         centerTitle: true,
