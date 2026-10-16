@@ -74,6 +74,7 @@ Future<void> changeCollectionVisibility(
     return;
   }
   if (!context.mounted) return;
+  final toastContext = Navigator.of(context).context;
   final visibilityAction = _getVisibilityAction(
     context,
     newVisibility,
@@ -98,6 +99,13 @@ Future<void> changeCollectionVisibility(
         update,
       );
     }
+    await dialog?.hide();
+    if (showProgressDialog && toastContext.mounted) {
+      showShortToast(
+        toastContext,
+        _visActionSuccessfulText(toastContext, visibilityAction),
+      );
+    }
     Bus.instance.fire(
       CollectionUpdatedEvent(
         collection.id,
@@ -117,13 +125,6 @@ Future<void> changeCollectionVisibility(
         "CollectionVisibilityChange: $visibilityAction",
       ),
     );
-    await dialog?.hide();
-    if (showProgressDialog && context.mounted) {
-      showShortToast(
-        context,
-        _visActionSuccessfulText(context, visibilityAction),
-      );
-    }
   } catch (e, s) {
     _logger.severe("failed to update collection visibility", e, s);
     await dialog?.hide();

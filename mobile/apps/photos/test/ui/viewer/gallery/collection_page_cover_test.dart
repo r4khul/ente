@@ -26,6 +26,7 @@ import "package:photos/db/ml/db.dart";
 import "package:photos/ente_theme_data.dart";
 import "package:photos/events/collection_meta_event.dart";
 import "package:photos/events/collection_updated_event.dart";
+import "package:photos/events/files_updated_event.dart";
 import "package:photos/gateways/entity/models/type.dart";
 import "package:photos/models/api/collection/user.dart";
 import "package:photos/models/collection/collection.dart";
@@ -36,6 +37,7 @@ import "package:photos/models/gallery_type.dart";
 import "package:photos/models/ignored_file.dart";
 import "package:photos/models/local_entity_data.dart";
 import "package:photos/models/metadata/collection_magic.dart";
+import "package:photos/models/metadata/common_keys.dart";
 import "package:photos/models/ml/face/face.dart";
 import "package:photos/models/ml/face/person.dart";
 import "package:photos/models/search/hierarchical/camera_filter.dart";
@@ -53,6 +55,7 @@ import "package:photos/settings/local_settings.dart";
 import "package:photos/src/rust/frb_generated.dart";
 import "package:photos/ui/collections/album/row_item.dart";
 import "package:photos/ui/collections/collection_list_page.dart";
+import "package:photos/ui/common/progress_dialog.dart";
 import "package:photos/ui/components/bottom_action_bar/action_bar_widget.dart";
 import "package:photos/ui/components/bottom_action_bar/selection_action_sheet.dart";
 import "package:photos/ui/viewer/actions/album_selection_overlay_bar.dart";
@@ -167,6 +170,54 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text("Album route"), findsNothing);
     expect(find.text("Open album"), findsOneWidget);
+  });
+
+  for (final isOwner in [true, false]) {
+    testWidgets(
+      "hiding ${isOwner ? 'an owned' : 'a received'} album restores responsive Albums",
+      (tester) async {
+        final collection = _collection(ownerID: isOwner ? 1 : 2);
+        var tapped = false;
+        await _pushAlbum(tester, collection, onAlbumsTap: () => tapped = true);
+        final dialog = ProgressDialog(
+          tester.element(find.byType(CollectionPage)),
+          isDismissible: false,
+        );
+        dialog.style(progressWidget: const SizedBox.shrink());
+        final shown = dialog.show();
+        await tester.pumpAndSettle();
+        expect(await shown, isTrue);
+
+        _hideAlbum(collection);
+        Bus.instance.fire(
+          CollectionUpdatedEvent(1, [], "test_hide", type: EventType.hide),
+        );
+        final hidden = dialog.hide();
+        await tester.pumpAndSettle();
+
+        expect(await hidden, isTrue);
+        expect(find.byType(Dialog), findsNothing);
+        expect(find.byType(CollectionPage), findsNothing);
+        expect(find.text("Nothing to see here"), findsNothing);
+        await tester.tap(find.text("Albums"));
+        expect(tapped, isTrue);
+        expect(tester.takeException(), isNull);
+        await _disposeAlbum(tester);
+      },
+    );
+  }
+
+  testWidgets("updates keep an unlocked hidden album open", (tester) async {
+    final collection = _collection();
+    _hideAlbum(collection);
+    await _pushAlbum(tester, collection, hasVerifiedLock: true);
+    Bus.instance.fire(CollectionUpdatedEvent(1, [], "test_update"));
+    await tester.pump();
+
+    expect(find.byType(CollectionPage), findsOneWidget);
+    expect(find.byType(Gallery), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await _disposeAlbum(tester);
   });
 
   testWidgets("paints the pinned date flush with the album app bar", (
@@ -1049,9 +1100,9 @@ void main() {
   );
 }
 
-Collection _collection() => Collection(
+Collection _collection({int ownerID = 1}) => Collection(
   1,
-  User(id: 1, email: "a@b.c"),
+  User(id: ownerID, email: "a@b.c"),
   "",
   null,
   "Album",
@@ -1063,6 +1114,55 @@ Collection _collection() => Collection(
   [],
   0,
 );
+
+void _hideAlbum(Collection collection) {
+  if (collection.isOwner(1)) {
+    collection.mMdVersion = 1;
+    collection.magicMetadata = CollectionMagicMetadata(
+      visibility: hiddenVisibility,
+    );
+  } else {
+    collection.sharedMmdVersion = 1;
+    collection.sharedMagicMetadata = ShareeMagicMetadata(
+      visibility: hiddenVisibility,
+    );
+  }
+}
+
+Future<void> _pushAlbum(
+  WidgetTester tester,
+  Collection collection, {
+  bool hasVerifiedLock = false,
+  VoidCallback? onAlbumsTap,
+}) async {
+  final file = _file(1);
+  await tester.runAsync(() => FilesDB.instance.insertMultiple([file]));
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: darkThemeData.copyWith(platform: TargetPlatform.iOS),
+      localizationsDelegates: StringsLocalizations.localizationsDelegates,
+      supportedLocales: StringsLocalizations.supportedLocales,
+      home: Scaffold(
+        body: TextButton(
+          onPressed: onAlbumsTap ?? () {},
+          child: const Text("Albums"),
+        ),
+      ),
+    ),
+  );
+  unawaited(
+    routeToPage(
+      tester.element(find.text("Albums")),
+      CollectionPage(
+        CollectionWithThumbnail(collection, null),
+        hasVerifiedLock: hasVerifiedLock,
+      ),
+      useFadeTransition: true,
+    ),
+  );
+  await tester.pump();
+  await _expectCover(tester, file, count: 1);
+}
 
 EnteFile _file(int id, {bool uploaded = true}) {
   final file = EnteFile()

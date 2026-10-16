@@ -85,7 +85,22 @@ class _CollectionPageState extends State<CollectionPage> {
     _collectionUpdatedSubscription = Bus.instance
         .on<CollectionUpdatedEvent>()
         .where((event) => event.collectionID == collection.id)
-        .listen((_) => _loadCover());
+        .listen((_) {
+          if (!mounted) return;
+          if (widget.hasVerifiedLock == false && collection.isHidden()) {
+            final route = ModalRoute.of(context);
+            if (route != null && route.isActive && !route.isFirst) {
+              final navigator = Navigator.of(context);
+              if (route.isCurrent) {
+                navigator.pop();
+              } else {
+                navigator.removeRoute(route);
+              }
+              return;
+            }
+          }
+          unawaited(_loadCover());
+        });
   }
 
   @override

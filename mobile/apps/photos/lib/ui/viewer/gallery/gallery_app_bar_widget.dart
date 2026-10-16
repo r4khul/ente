@@ -1465,7 +1465,9 @@ class _GalleryAppBarWidgetState extends State<GalleryAppBarWidget> {
       newVisibility: newVisiblity,
       prevVisibility: prevVisiblity,
     );
-    setState(() {});
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> archiveOrUnarchive() async {
