@@ -33,3 +33,10 @@ dev_dependencies:
     sdk: flutter
 
 flutter:
+  plugin:
+    platforms:
+      android:
+        package: io.ente.configuration
+        pluginClass: EnteConfigurationPlugin
+      ios:
+        pluginClass: EnteConfigurationPlugin

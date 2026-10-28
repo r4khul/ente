@@ -15,6 +15,8 @@ PODS:
     - Flutter
   - ente_cast (0.0.1):
     - Flutter
+  - ente_configuration (1.0.0):
+    - Flutter
   - ente_mail (0.0.1):
     - Flutter
   - ente_notification_uniffi (0.1.0)
@@ -247,6 +249,7 @@ DEPENDENCIES:
   - device_info_plus (from `.symlinks/plugins/device_info_plus/ios`)
   - ente_background_manager (from `.symlinks/plugins/ente_background_manager/ios`)
   - ente_cast (from `.symlinks/plugins/ente_cast/ios`)
+  - ente_configuration (from `.symlinks/plugins/ente_configuration/ios`)
   - ente_mail (from `.symlinks/plugins/ente_mail/ios`)
   - ente_notification_uniffi (from `NotificationServiceExtension`)
   - ente_panorama_viewer (from `.symlinks/plugins/ente_panorama_viewer/ios`)
@@ -334,6 +337,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/ente_background_manager/ios"
   ente_cast:
     :path: ".symlinks/plugins/ente_cast/ios"
+  ente_configuration:
+    :path: ".symlinks/plugins/ente_configuration/ios"
   ente_mail:
     :path: ".symlinks/plugins/ente_mail/ios"
   ente_notification_uniffi:
@@ -444,6 +449,7 @@ SPEC CHECKSUMS:
   device_info_plus: 21fcca2080fbcd348be798aa36c3e5ed849eefbe
   ente_background_manager: f10e3bd64ccd32a3232f0fbacabdd5545af8d81e
   ente_cast: a25feb3127397e5fc6aff03a12120916707757d4
+  ente_configuration: ea14b6e1e303ec1090e6412d00293b931b193e1f
   ente_mail: f0569c7ea17e8324ef28f36a93c49fa1f3de724f
   ente_notification_uniffi: 51004b2f6928f8fa748c870298e3788b046ae59e
   ente_panorama_viewer: 16357cfb314c3f3f6abc0374ce17bfe371e528c2
