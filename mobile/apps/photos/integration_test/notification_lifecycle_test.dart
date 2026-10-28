@@ -1,12 +1,12 @@
 import 'dart:convert';
 
+import 'package:ente_configuration/secure_session_token.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:photos/core/configuration.dart';
 import 'package:photos/services/notification_key_service.dart';
 import 'package:photos/services/notification_service.dart';
 import 'package:photos/src/rust/frb_generated.dart';
@@ -67,7 +67,7 @@ void main() {
   testWidgets('fallback is shown when signed in and suppressed after logout', (
     tester,
   ) async {
-    await preferences.setString(Configuration.tokenKey, 'test-session');
+    await SecureSessionToken(preferences, storage).setToken('test-session');
     Future<void> receive() =>
         NotificationService.instance.handlePushNotification(
           {'notificationCiphertext': 'invalid'},
@@ -82,7 +82,10 @@ void main() {
 
     final rootToken = RootIsolateToken.instance!;
     await compute(_clearAccount, rootToken);
-    expect(preferences.getString(Configuration.tokenKey), isNotNull);
+    expect(
+      preferences.getString(SecureSessionToken.stateKey),
+      SecureSessionToken.secureState,
+    );
     await receive();
     await Future<void>.delayed(const Duration(milliseconds: 500));
     expect(await notifications.getActiveNotifications(), isEmpty);

@@ -8,12 +8,15 @@ import 'package:ente_base/models/key_gen_result.dart';
 import 'package:ente_base/models/private_key_attributes.dart';
 import 'package:ente_configuration/app_identity.dart';
 import 'package:ente_configuration/constants.dart';
+import 'package:ente_configuration/secure_session_token.dart';
+import 'package:ente_configuration/secure_storage.dart';
 import 'package:ente_crypto_api/ente_crypto_api.dart';
 import 'package:ente_events/event_bus.dart';
 import 'package:ente_events/models/endpoint_updated_event.dart';
 import 'package:ente_events/models/signed_in_event.dart';
 import 'package:ente_events/models/signed_out_event.dart';
 import 'package:ente_logging/logging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
@@ -32,18 +35,18 @@ abstract class BaseConfiguration {
   static const keyAttributesKey = "key_attributes";
   static const keyKey = "key";
   static const secretKeyKey = "secret_key";
-  static const tokenKey = "token";
+  static const tokenKey = SecureSessionToken.tokenKey;
   static const encryptedTokenKey = "encrypted_token";
   static const userIDKey = "user_id";
   static const endPointKey = "endpoint";
   static const lastTempFolderClearTimeKey = "last_temp_folder_clear_time";
-  static const accountSecureStorageKeys = [keyKey, secretKeyKey];
+  static const accountSecureStorageKeys = [keyKey, secretKeyKey, tokenKey];
 
   final kTempFolderDeletionTimeBuffer = const Duration(days: 1).inMicroseconds;
 
   static final _logger = Logger("Configuration");
 
-  String? _cachedToken;
+  SecureSessionToken? _sessionToken;
   late SharedPreferences _preferences;
   String? _key;
   String? _secretKey;
@@ -64,12 +67,16 @@ abstract class BaseConfiguration {
     _databases = dbs;
     _tempDocumentsDirPath =
         "${p.join((await getApplicationCacheDirectory()).path, "temp")}${p.separator}";
-    _preferences = await SharedPreferences.getInstance();
+    final preferences = await SharedPreferences.getInstance();
     _secureStorage = const FlutterSecureStorage(
       iOptions: IOSOptions(
         accessibility: KeychainAccessibility.first_unlock_this_device,
       ),
     );
+    if (_sessionToken == null || !identical(_preferences, preferences)) {
+      _sessionToken = SecureSessionToken(preferences, _secureStorage);
+    }
+    _preferences = preferences;
     // Set up folders before keys so the cache directory is initialized before
     // _setupKeys() can trigger an auto-logout whose cleanup needs it.
     await _setupFolders();
@@ -78,19 +85,24 @@ abstract class BaseConfiguration {
   }
 
   Future<void> logout({bool autoLogout = false}) async {
+    if (await _sessionToken!.logout(clearAccount, autoLogout: autoLogout)) {
+      Bus.instance.fire(SignedOutEvent());
+    }
+  }
+
+  @protected
+  Future<void> clearAccount() async {
     await _clearTempFolderOnLogout();
-    await _preferences.clear();
+    await _sessionToken!.clearPreferences();
     await resetSecureStorage();
     for (final key in lockScreenSecureStorageKeys) {
-      await _secureStorage.delete(key: key);
+      await deleteSecureStorage(_secureStorage, key: key);
     }
     for (final db in _databases) {
       await db.clearTable();
     }
     _key = null;
-    _cachedToken = null;
     _secretKey = null;
-    Bus.instance.fire(SignedOutEvent());
   }
 
   Future<void> _clearTempFolderOnLogout() async {
@@ -112,7 +124,7 @@ abstract class BaseConfiguration {
       'secureStorageKeys must not be empty. Apps must explicitly define which keys to clear.',
     );
     for (final key in secureStorageKeys.toSet()) {
-      await _secureStorage.delete(key: key);
+      await deleteSecureStorage(_secureStorage, key: key);
     }
   }
 
@@ -302,8 +314,7 @@ abstract class BaseConfiguration {
   }
 
   String? getToken() {
-    _cachedToken ??= _preferences.getString(tokenKey);
-    return _cachedToken;
+    return _sessionToken?.token;
   }
 
   bool isLoggedIn() {
@@ -311,9 +322,9 @@ abstract class BaseConfiguration {
   }
 
   Future<void> setToken(String token) async {
-    _cachedToken = token;
-    await _preferences.setString(tokenKey, token);
-    Bus.instance.fire(SignedInEvent());
+    if (await _sessionToken!.setToken(token)) {
+      Bus.instance.fire(SignedInEvent());
+    }
   }
 
   Future<void> setEncryptedToken(String encryptedToken) async {
@@ -406,33 +417,33 @@ abstract class BaseConfiguration {
   }
 
   Future<void> _setupKeys() async {
+    _key = null;
+    _secretKey = null;
     try {
-      if (!_preferences.containsKey(tokenKey)) {
-        await resetSecureStorage();
+      await _sessionToken!.initialize(resetSecureStorage: resetSecureStorage);
+      if (_sessionToken!.requiresLogout) {
+        await logout(autoLogout: true);
         return;
       }
-      _key = await _secureStorage.read(key: keyKey);
-      if (_key == null) {
-        _logger.warning("No key found in secure storage");
+      if (getToken() == null) return;
+      final token = getToken();
+      final key = await readSecureStorage(_secureStorage, keyKey);
+      if (getToken() != token) return;
+      if (key == null) {
         await logout(autoLogout: true);
+        return;
       }
-      _secretKey = await _secureStorage.read(key: secretKeyKey);
+      _key = key;
+      final secretKey = await readSecureStorage(_secureStorage, secretKeyKey);
+      if (getToken() == token) _secretKey = secretKey;
     } catch (e, s) {
       _logger.severe("Configuration init failed", e, s);
-      // BadPaddingException can mean Android secure storage is inaccessible.
-      // https://github.com/mogol/flutter_secure_storage/issues/541
-      if (e is PlatformException) {
-        final PlatformException error = e;
-        final bool isBadPaddingError =
-            error.toString().contains('BadPaddingException') ||
-            (error.message ?? '').contains('BadPaddingException');
-        if (isBadPaddingError) {
-          await logout(autoLogout: true);
-          return;
-        }
-      } else {
-        rethrow;
+      if (e is PlatformException &&
+          e.toString().contains('BadPaddingException')) {
+        await logout(autoLogout: true);
+        return;
       }
+      rethrow;
     }
   }
 

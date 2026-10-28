@@ -1,5 +1,6 @@
 import Flutter
 import Foundation
+import Security
 
 final class NotificationKeyPlugin: NSObject, FlutterPlugin {
   private static let queue = DispatchQueue(label: "io.ente.frame.notifications.keys")
@@ -20,10 +21,10 @@ final class NotificationKeyPlugin: NSObject, FlutterPlugin {
       do {
         let arguments = call.arguments as? [String: Any] ?? [:]
         if call.method == "getPrivateKey" || call.method == "setPrivateKey" {
-          guard let token = arguments["sessionToken"] as? String,
-            UserDefaults.standard.string(forKey: "flutter.token") == token else {
+          guard let token = arguments["sessionToken"] as? String else {
             throw NotificationKeyStore.StoreError.invalidRecord
           }
+          try Self.validateSession(token)
         }
         let response: Any?
         switch call.method {
@@ -49,6 +50,34 @@ final class NotificationKeyPlugin: NSObject, FlutterPlugin {
           result(FlutterError(code: "notification_key_store", message: "\(error)", details: nil))
         }
       }
+    }
+  }
+
+  private static func validateSession(_ token: String) throws {
+    let stateKey = "flutter.session_token_state"
+    guard UserDefaults.standard.string(forKey: stateKey) == "secure" else {
+      throw NotificationKeyStore.StoreError.invalidRecord
+    }
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: "flutter_secure_storage_service",
+      kSecAttrAccount as String: "token",
+      kSecAttrSynchronizable as String: false,
+      kSecReturnData as String: true,
+      kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    var result: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &result)
+    if status == errSecItemNotFound {
+      throw NotificationKeyStore.StoreError.invalidRecord
+    }
+    guard status == errSecSuccess else {
+      throw NotificationKeyStore.StoreError.keychain(status)
+    }
+    guard let data = result as? Data,
+      String(data: data, encoding: .utf8) == token,
+      UserDefaults.standard.string(forKey: stateKey) == "secure" else {
+      throw NotificationKeyStore.StoreError.invalidRecord
     }
   }
 }

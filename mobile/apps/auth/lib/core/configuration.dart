@@ -107,10 +107,10 @@ class Configuration extends BaseConfiguration
   );
 
   @override
-  Future<void> logout({bool autoLogout = false}) async {
+  Future<void> clearAccount() async {
     clearAuthenticatedSession();
     _authSecretKey = null;
-    await super.logout();
+    await super.clearAccount();
   }
 
   Future<void> setAuthSecretKey(String? authSecretKey) async {
