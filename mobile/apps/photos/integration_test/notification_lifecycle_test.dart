@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:ente_configuration/secure_session_token.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -12,6 +13,7 @@ import 'package:photos/service_locator.dart';
 import 'package:photos/services/notification_key_service.dart';
 import 'package:photos/services/notification_service.dart';
 import 'package:photos/services/push_service.dart';
+import 'package:photos/settings/local_settings.dart';
 import 'package:photos/src/rust/frb_generated.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -70,7 +72,7 @@ void main() {
   testWidgets('fallback is shown when signed in and suppressed after logout', (
     tester,
   ) async {
-    await preferences.setString(Configuration.tokenKey, 'test-session');
+    await SecureSessionToken(preferences, storage).setToken('test-session');
     Future<void> receive() =>
         NotificationService.instance.handlePushNotification(
           {'notificationCiphertext': 'invalid'},
@@ -85,7 +87,10 @@ void main() {
 
     final rootToken = RootIsolateToken.instance!;
     await compute(_clearAccount, rootToken);
-    expect(preferences.getString(Configuration.tokenKey), isNotNull);
+    expect(
+      preferences.getString(SecureSessionToken.stateKey),
+      SecureSessionToken.secureState,
+    );
     await receive();
     await Future<void>.delayed(const Duration(milliseconds: 500));
     expect(await notifications.getActiveNotifications(), isEmpty);
@@ -121,8 +126,9 @@ void main() {
       );
     ServiceLocator.instance.prefs = preferences;
     ServiceLocator.instance.enteDio = dio;
+    ServiceLocator.instance.localSettings = LocalSettings(preferences);
     await Configuration.instance.init(preferences);
-    await preferences.setString(Configuration.tokenKey, 'test-session');
+    await Configuration.instance.setToken('test-session');
     await preferences.setBool('ls.internal_user_disabled', true);
     await preferences.setString('remote_flags', '{"internalUser":false}');
     expect(flagService.internalUser, isFalse);
