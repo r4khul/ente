@@ -42,6 +42,8 @@ dependencies:
     path: plugins/ente_cast
   ente_components:
     path: ../../packages/ente_components
+  ente_configuration:
+    path: ../../packages/configuration
   ente_contacts:
     path: ../../packages/contacts
   ente_crypto:

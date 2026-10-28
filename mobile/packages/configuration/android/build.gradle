@@ -1,0 +1,14 @@
+plugins {
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.android'
+}
+
+group 'io.ente.configuration'
+
+android {
+    namespace 'io.ente.configuration'
+
+    defaultConfig {
+        minSdkVersion 21
+    }
+}

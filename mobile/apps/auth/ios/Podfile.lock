@@ -40,6 +40,8 @@ PODS:
     - SwiftyGif
   - ente_auth_frb (0.0.1):
     - Flutter
+  - ente_configuration (1.0.0):
+    - Flutter
   - ente_mail (0.0.1):
     - Flutter
   - ente_qr (0.0.1):
@@ -129,6 +131,7 @@ DEPENDENCIES:
   - connectivity_plus (from `.symlinks/plugins/connectivity_plus/ios`)
   - device_info_plus (from `.symlinks/plugins/device_info_plus/ios`)
   - ente_auth_frb (from `.symlinks/plugins/ente_auth_frb/ios`)
+  - ente_configuration (from `.symlinks/plugins/ente_configuration/ios`)
   - ente_mail (from `.symlinks/plugins/ente_mail/ios`)
   - ente_qr (from `.symlinks/plugins/ente_qr/ios`)
   - ente_qr_scanner (from `.symlinks/plugins/ente_qr_scanner/ios`)
@@ -174,6 +177,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/device_info_plus/ios"
   ente_auth_frb:
     :path: ".symlinks/plugins/ente_auth_frb/ios"
+  ente_configuration:
+    :path: ".symlinks/plugins/ente_configuration/ios"
   ente_mail:
     :path: ".symlinks/plugins/ente_mail/ios"
   ente_qr:
@@ -231,6 +236,7 @@ SPEC CHECKSUMS:
   DKImagePickerController: 946cec48c7873164274ecc4624d19e3da4c1ef3c
   DKPhotoGallery: b3834fecb755ee09a593d7c9e389d8b5d6deed60
   ente_auth_frb: 2f9fe254c3faed407bda0b0fbb89d810a291411e
+  ente_configuration: ea14b6e1e303ec1090e6412d00293b931b193e1f
   ente_mail: f0569c7ea17e8324ef28f36a93c49fa1f3de724f
   ente_qr: 86beaf5d2644705db9b565b32dd8b82c05fb36af
   ente_qr_scanner: 91ee1a2245149fb91f00b5b688285a7c94bb9caa
