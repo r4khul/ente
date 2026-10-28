@@ -1,0 +1,32 @@
+00:00 +0: loading /tmp/ente-pr46-evidence/fixture_test.dart
+00:00 +0: (setUpAll)
+00:00 +0: entry light
+00:02 +1: overview light
+00:03 +2: selection light
+00:04 +3: completed-year light
+00:04 +4: expanded-year light
+00:04 +5: swipe light
+00:05 +6: keep-swipe light
+00:06 +7: delete-swipe light
+00:06 +8: video light
+00:07 +9: queue light
+00:07 +10: confirmation light
+00:08 +11: done-freed light
+00:08 +12: done-kept light
+00:09 +13: empty light
+00:09 +14: entry dark
+00:09 +15: overview dark
+00:10 +16: selection dark
+00:10 +17: completed-year dark
+00:11 +18: expanded-year dark
+00:11 +19: swipe dark
+00:12 +20: keep-swipe dark
+00:12 +21: delete-swipe dark
+00:13 +22: video dark
+00:13 +23: queue dark
+00:14 +24: confirmation dark
+00:14 +25: done-freed dark
+00:15 +26: done-kept dark
+00:15 +27: empty dark
+00:15 +28: (tearDownAll)
+00:15 +28: All tests passed!
