@@ -1,4 +1,3 @@
-import { appendCollectionKeyToShareURL } from "ente-gallery/services/share";
 import type { EnteFile } from "ente-media/file";
 import { fileCreationTime } from "ente-media/file-metadata";
 
@@ -68,23 +67,3 @@ export const quickLinkDateRangeForFiles = (files: EnteFile[]) => {
 
 export const quickLinkNameForFiles = (files: EnteFile[]) =>
     quickLinkDateRangeForFiles(files) ?? "Quick link";
-
-const substituteCustomDomainIfNeeded = (
-    url: string,
-    customDomain: string | undefined,
-) => {
-    if (!customDomain) return url;
-    const u = new URL(url);
-    u.host = customDomain;
-    return u.href;
-};
-
-export const resolveQuickLinkURL = async (
-    publicURL: string,
-    collectionKey: string,
-    customDomain: string | undefined,
-) =>
-    substituteCustomDomainIfNeeded(
-        await appendCollectionKeyToShareURL(publicURL, collectionKey),
-        customDomain,
-    );

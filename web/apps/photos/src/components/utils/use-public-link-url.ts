@@ -1,6 +1,18 @@
-import { appendCollectionKeyToShareURL } from "ente-gallery/services/share";
 import type { Collection, PublicURL } from "ente-media/collection";
+import { publicAlbumShareURL } from "ente-photos-wasm";
 import { useEffect, useMemo, useState } from "react";
+
+export const resolvePublicLinkURL = async (
+    publicURL: string,
+    collectionKey: string,
+    customDomain: string | undefined,
+) => {
+    const url = await publicAlbumShareURL(publicURL, collectionKey);
+    if (!customDomain) return url;
+    const customURL = new URL(url);
+    customURL.host = customDomain;
+    return customURL.href;
+};
 
 export const usePublicLinkURL = (
     collection: Pick<Collection, "id" | "key">,
@@ -22,14 +34,9 @@ export const usePublicLinkURL = (
         if (!input.url) return;
         let cancelled = false;
 
-        void appendCollectionKeyToShareURL(input.url, input.key)
-            .then((url) => {
-                if (input.customDomain) {
-                    const customURL = new URL(url);
-                    customURL.host = input.customDomain;
-                    url = customURL.href;
-                }
-                if (!cancelled) setResult({ input, resolvedURL: url });
+        void resolvePublicLinkURL(input.url, input.key, input.customDomain)
+            .then((resolvedURL) => {
+                if (!cancelled) setResult({ input, resolvedURL });
             })
             .catch((error: unknown) => {
                 if (!cancelled) setResult({ input, error });

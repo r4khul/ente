@@ -57,6 +57,7 @@ import {
     notifyUnsupportedSharedFavoritesDialogAttributes,
     trashFilesDialogAttributes,
 } from "@/components/utils/dialog-attributes";
+import { resolvePublicLinkURL } from "@/components/utils/use-public-link-url";
 import exportService from "@/services/export";
 import { processPendingAlbumJoin } from "@/services/join-album";
 import {
@@ -157,10 +158,7 @@ import {
     type SelectedState,
 } from "@/utils/file";
 import type { FileContextAction } from "@/utils/file-actions";
-import {
-    quickLinkNameForFiles,
-    resolveQuickLinkURL,
-} from "ente-gallery/utils/quick-link";
+import { quickLinkNameForFiles } from "ente-gallery/utils/quick-link";
 import {
     savedCollectionFiles,
     savedCollections,
@@ -1316,7 +1314,7 @@ const Page: React.FC = () => {
                             quickLinkCollection.id,
                             { enableJoin: false },
                         );
-                        const resolvedURL = await resolveQuickLinkURL(
+                        const resolvedURL = await resolvePublicLinkURL(
                             publicURL.url,
                             quickLinkCollection.key,
                             customDomain,
@@ -1723,7 +1721,7 @@ const Page: React.FC = () => {
                     quickLinkCollection.id,
                     { enableJoin: false },
                 );
-                const resolvedURL = await resolveQuickLinkURL(
+                const resolvedURL = await resolvePublicLinkURL(
                     publicURL.url,
                     quickLinkCollection.key,
                     customDomain,
