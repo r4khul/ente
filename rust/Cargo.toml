@@ -93,6 +93,7 @@ flutter_rust_bridge = "=2.13.0"
 flutter_rust_bridge_codegen = "=2.13.0"
 futures-util = "0.3.32"
 getrandom = { version = "0.4.0", features = ["wasm_js"] }
+hex = "0.4.0"
 hkdf = "0.13.0"
 hmac = "0.13.0"
 icu_casemap = "2.2.0"

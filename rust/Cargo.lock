@@ -2573,10 +2573,13 @@ dependencies = [
 name = "ente-collections"
 version = "0.0.0"
 dependencies = [
+ "bs58",
  "ente-core",
+ "hex",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "url",
 ]
 
 [[package]]
