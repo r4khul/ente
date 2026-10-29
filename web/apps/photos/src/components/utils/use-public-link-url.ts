@@ -7,11 +7,9 @@ export const resolvePublicLinkURL = async (
     collectionKey: string,
     customDomain: string | undefined,
 ) => {
-    const url = await publicAlbumShareURL(publicURL, collectionKey);
-    if (!customDomain) return url;
-    const customURL = new URL(url);
-    customURL.host = customDomain;
-    return customURL.href;
+    const url = new URL(await publicAlbumShareURL(publicURL, collectionKey));
+    if (customDomain) url.host = customDomain;
+    return url.href;
 };
 
 export const usePublicLinkURL = (
