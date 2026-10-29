@@ -2707,6 +2707,7 @@ name = "ente-frb-lib"
 version = "0.0.0"
 dependencies = [
  "ente-accounts",
+ "ente-collections",
  "ente-contacts",
  "ente-core",
  "ente-legacy",

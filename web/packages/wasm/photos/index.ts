@@ -93,6 +93,11 @@ export const openCollectionKey = async (
         keyDecryptionNonce,
     );
 
+export const publicAlbumShareURL = async (
+    publicURL: string,
+    collectionKey: string,
+) => (await wasm()).collectionsPublicAlbumShareUrl(publicURL, collectionKey);
+
 export const prepareCastPayload = async (
     publicKey: string,
     pqPublicKey: string | undefined,
