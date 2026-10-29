@@ -7,7 +7,6 @@ import 'package:dio/dio.dart';
 import 'package:ente_crypto/ente_crypto.dart';
 import 'package:ente_pure_utils/ente_pure_utils.dart';
 import "package:ente_strings/ente_strings.dart";
-import "package:fast_base58/fast_base58.dart";
 import 'package:flutter/foundation.dart';
 import "package:flutter/material.dart";
 import 'package:logging/logging.dart';
@@ -46,17 +45,10 @@ import 'package:photos/services/sync/local_sync_service.dart';
 import 'package:photos/services/sync/remote_sync_service.dart';
 import "package:photos/settings/local_settings.dart";
 import "package:photos/src/rust/api/cast_api.dart";
+import "package:photos/src/rust/third_party/ente_frb_lib/collections.dart";
 import "package:photos/utils/dialog_util.dart";
 import "package:photos/utils/file_key.dart";
 import 'package:shared_preferences/shared_preferences.dart';
-
-String? _resolvePublicAlbumAccessToken(Uri uri) {
-  final tokenFromQuery = uri.queryParameters["t"];
-  if (tokenFromQuery != null && tokenFromQuery.isNotEmpty) {
-    return tokenFromQuery;
-  }
-  return uri.pathSegments.firstWhereOrNull((segment) => segment.isNotEmpty);
-}
 
 class CollectionsService {
   static const _collectionSyncTimeKeyPrefix = "collection_sync_time_";
@@ -64,7 +56,6 @@ class CollectionsService {
 
   static const int kMaximumWriteAttempts = 5;
   static const int _maxSocialCleanupRetries = 3;
-  static const int _collectionKeyLength = 32;
   static const int _shareBatchSize = 10;
 
   final _logger = Logger("CollectionsService");
@@ -87,7 +78,6 @@ class CollectionsService {
   final _cachedPublicAlbumToken = <int, String>{};
   final _cachedPublicAlbumJWT = <int, String>{};
   final _cachedPublicCollectionID = <int>[];
-  final _cachedPublicAlbumKey = <int, String>{};
   final _cachedPublicCollectionKeys = <int, Uint8List>{};
 
   static const int _maxRecentlyUsedCollections = 3;
@@ -223,7 +213,6 @@ class CollectionsService {
     _cachedPublicAlbumJWT.clear();
     _cachedPublicCollectionID.clear();
     _cachedKeys.clear();
-    _cachedPublicAlbumKey.clear();
     _cachedPublicCollectionKeys.clear();
   }
 
@@ -1221,10 +1210,6 @@ class CollectionsService {
       );
     }
 
-    final String collectionKey = Base58Encode(
-      CollectionsService.instance.getCollectionKey(c.id),
-    );
-
     String finalUrl = publicUrl.toString();
 
     // Handle IDN domains - if the host was percent-encoded by Uri.replace,
@@ -1234,7 +1219,10 @@ class CollectionsService {
       finalUrl = finalUrl.replaceFirst(publicUrl.host, decodedHost);
     }
 
-    return "$finalUrl#$collectionKey";
+    return publicAlbumShareUrl(
+      publicUrl: finalUrl,
+      collectionKey: getCollectionKey(c.id),
+    );
   }
 
   String getEmbedHtml(Collection c) {
@@ -1253,10 +1241,6 @@ class CollectionsService {
       );
     }
 
-    final String collectionKey = Base58Encode(
-      CollectionsService.instance.getCollectionKey(c.id),
-    );
-
     String finalUrl = publicUrl.toString();
 
     // Handle IDN domains - if the host was percent-encoded by Uri.replace,
@@ -1266,7 +1250,10 @@ class CollectionsService {
       finalUrl = finalUrl.replaceFirst(publicUrl.host, decodedHost);
     }
 
-    final String embedHtmlUrl = "$finalUrl#$collectionKey";
+    final String embedHtmlUrl = publicAlbumShareUrl(
+      publicUrl: finalUrl,
+      collectionKey: getCollectionKey(c.id),
+    );
     return '<iframe src="$embedHtmlUrl" width="800" height="600" frameborder="0" allowfullscreen></iframe>';
   }
 
@@ -1664,17 +1651,6 @@ class CollectionsService {
     }
   }
 
-  Uint8List _decodePublicCollectionKey(String albumKey) {
-    if (albumKey.isEmpty) {
-      throw const FormatException("Missing public collection key");
-    }
-    final collectionKey = Uint8List.fromList(Base58Decode(albumKey));
-    if (collectionKey.length != _collectionKeyLength) {
-      throw const FormatException("Invalid public collection key length");
-    }
-    return collectionKey;
-  }
-
   Future<void> _decryptPublicCollectionFields(
     Collection collection,
     Map<String, dynamic> collectionData,
@@ -1701,7 +1677,6 @@ class CollectionsService {
     _cachedPublicAlbumToken.remove(collectionID);
     _cachedPublicAlbumJWT.remove(collectionID);
     _cachedPublicCollectionID.removeWhere((id) => id == collectionID);
-    _cachedPublicAlbumKey.remove(collectionID);
     _cachedPublicCollectionKeys.remove(collectionID);
   }
 
@@ -1709,11 +1684,10 @@ class CollectionsService {
     BuildContext context,
     Uri uri,
   ) async {
-    final String? authToken = _resolvePublicAlbumAccessToken(uri);
-    final String albumKey = uri.fragment;
     try {
+      final link = parsePublicAlbumShareUrl(url: uri.toString());
       final responseData = await collectionShareGateway.getPublicCollectionInfo(
-        authToken!,
+        link.accessToken,
       );
 
       final collectionData = responseData["collection"];
@@ -1742,17 +1716,15 @@ class CollectionsService {
         return collection;
       }
 
-      final collectionKey = _decodePublicCollectionKey(albumKey);
       await _decryptPublicCollectionFields(
         collection,
         collectionData,
-        collectionKey,
+        link.collectionKey,
       );
-      _cachedPublicCollectionKeys[collection.id] = collectionKey;
-      _cachedPublicAlbumToken[collection.id] = authToken;
+      _cachedPublicCollectionKeys[collection.id] = link.collectionKey;
+      _cachedPublicAlbumToken[collection.id] = link.accessToken;
       _cachedPublicCollectionID.removeWhere((id) => id == collection.id);
       _cachedPublicCollectionID.add(collection.id);
-      _cachedPublicAlbumKey[collection.id] = albumKey;
       _cachedPublicAlbumJWT.remove(collection.id);
       return collection;
     } on PublicCollectionInfoExpiredException catch (e, s) {
@@ -1834,10 +1806,6 @@ class CollectionsService {
     BuildContext context,
     int collectionID,
   ) async {
-    final albumKey = getSharedPublicAlbumKey(collectionID);
-    if (albumKey.isEmpty) {
-      throw Exception("Collection key not found");
-    }
     final collectionKey = getPublicCollectionKey(collectionID);
     final encryptedKey = CryptoUtil.sealSync(
       collectionKey,
@@ -1850,13 +1818,6 @@ class CollectionsService {
       encryptedKey: CryptoUtil.bin2base64(encryptedKey),
       headers: publicCollectionHeaders(collectionID),
     );
-  }
-
-  String getSharedPublicAlbumKey(int collectionID) {
-    if (_cachedPublicAlbumKey.containsKey(collectionID)) {
-      return _cachedPublicAlbumKey[collectionID]!;
-    }
-    return "";
   }
 
   String? getSharedPublicAlbumToken(int collectionID) {

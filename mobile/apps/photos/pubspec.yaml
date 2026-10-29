@@ -87,7 +87,6 @@ dependencies:
   exif_reader: 4.2.0
   extended_image: 9.1.0
   fade_indexed_stack: 0.2.2
-  fast_base58: 0.2.1
   ffmpeg:
     path: plugins/ffmpeg
   figma_squircle: 0.6.3

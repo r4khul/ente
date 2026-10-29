@@ -29,6 +29,7 @@ import 'package:photos/service_locator.dart';
 import 'package:photos/services/collections_service.dart';
 import "package:photos/services/files_service.dart";
 import "package:photos/services/review_service.dart";
+import "package:photos/src/rust/third_party/ente_frb_lib/collections.dart";
 import "package:photos/states/location_screen_state.dart";
 import "package:photos/theme/ente_theme.dart";
 import 'package:photos/ui/actions/collection/collection_sharing_actions.dart';
@@ -1481,8 +1482,11 @@ class _GalleryAppBarWidgetState extends State<GalleryAppBarWidget> {
         final authToken = CollectionsService.instance.getSharedPublicAlbumToken(
           collection.id,
         );
-        final albumKey = CollectionsService.instance.getSharedPublicAlbumKey(
-          collection.id,
+        final shareUrl = publicAlbumShareUrl(
+          publicUrl: "https://albums.ente.com/?t=$authToken",
+          collectionKey: CollectionsService.instance.getPublicCollectionKey(
+            collection.id,
+          ),
         );
 
         final res = await showChoiceDialog(
@@ -1497,10 +1501,7 @@ class _GalleryAppBarWidgetState extends State<GalleryAppBarWidget> {
           if (!mounted) return;
           await Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (context) => WebPage(
-                widget.title ?? "",
-                "https://albums.ente.com/?t=$authToken#$albumKey",
-              ),
+              builder: (context) => WebPage(widget.title ?? "", shareUrl),
             ),
           );
         }
