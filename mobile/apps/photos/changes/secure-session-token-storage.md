@@ -1,0 +1,1 @@
+- Improved secure storage of signed-in sessions.

@@ -69,10 +69,10 @@ class Configuration extends BaseConfiguration
   );
 
   @override
-  Future<void> logout({bool autoLogout = false}) async {
+  Future<void> clearAccount() async {
     CollectionService.instance.clearCache();
     FavoritesService.instance.clearCache();
-    await super.logout(autoLogout: autoLogout);
+    await super.clearAccount();
     clearAuthenticatedSession();
     try {
       await clearAllOfflineFileCopies();

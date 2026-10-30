@@ -2,14 +2,15 @@ import "dart:async";
 import 'dart:io';
 
 import "package:android_intent_plus/android_intent.dart";
+import "package:ente_configuration/secure_session_token.dart";
 import "package:flutter/services.dart";
 import "package:flutter/widgets.dart";
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import "package:flutter_timezone/flutter_timezone.dart";
 import "package:logging/logging.dart";
 import "package:package_info_plus/package_info_plus.dart";
 import "package:permission_handler/permission_handler.dart";
-import "package:photos/core/configuration.dart";
 import "package:photos/services/language_service.dart";
 import "package:photos/services/notification_key_service.dart";
 import "package:photos/services/timezone_aliases.dart";
@@ -60,8 +61,18 @@ class NotificationService {
       _logger.warning('Could not decrypt notification');
     }
     if (event == null) {
-      await _preferences.reload();
-      if (_preferences.getString(Configuration.tokenKey) == null) return;
+      try {
+        if (await SecureSessionToken.read(
+              _preferences,
+              const FlutterSecureStorage(),
+            ) ==
+            null) {
+          return;
+        }
+      } catch (e, s) {
+        _logger.warning('Could not read notification session', e, s);
+        return;
+      }
       if (shouldShowNotificationsForSharedPhotosAndAlbums()) {
         final strings = await LanguageService.locals;
         await showNotification(

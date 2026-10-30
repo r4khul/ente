@@ -3,6 +3,8 @@ import "dart:io";
 
 import 'package:backup_exclusion/backup_exclusion.dart';
 import 'package:ente_account_deletion/account_deletion.dart';
+import 'package:ente_configuration/secure_session_token.dart';
+import 'package:ente_configuration/secure_storage.dart';
 import 'package:ente_contacts/contacts.dart';
 import "package:ente_crypto/ente_crypto.dart";
 import 'package:ente_lock_screen/lock_screen_host.dart';
@@ -48,6 +50,7 @@ import 'package:photos/services/notification_key_service.dart';
 import "package:photos/services/notification_service.dart";
 import 'package:photos/services/photos_contacts_service.dart';
 import 'package:photos/services/search_service.dart';
+import 'package:photos/services/session_token_lock.dart';
 import 'package:photos/services/sync/sync_service.dart';
 import 'package:photos/services/video_preview_service.dart';
 import 'package:photos/src/rust/third_party/ente_frb_lib/account_deletion.dart'
@@ -65,14 +68,14 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
   static const keyKey = "key";
   static const lastTempFolderClearTimeKey = "last_temp_folder_clear_time";
   static const secretKeyKey = "secret_key";
-  static const tokenKey = "token";
+  static const tokenKey = SecureSessionToken.tokenKey;
   static const encryptedTokenKey = "encrypted_token";
   static const userIDKey = "user_id";
   static const hasMigratedSecureStorageKey = "has_migrated_secure_storage";
   static const anonymousUserIDKey = "anonymous_user_id";
   static final _logger = Logger("Configuration");
 
-  String? _cachedToken;
+  SecureSessionToken? _sessionToken;
   late String _documentsDirectory;
   String? _key;
   late SharedPreferences _preferences;
@@ -86,13 +89,24 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
   String? _volatilePassword;
 
   Future<void> init(SharedPreferences preferences) async {
+    _key = null;
+    _secretKey = null;
     try {
-      _preferences = preferences;
       _secureStorage = const FlutterSecureStorage(
         iOptions: IOSOptions(
           accessibility: KeychainAccessibility.first_unlock_this_device,
         ),
       );
+      if (_sessionToken == null || !identical(_preferences, preferences)) {
+        _sessionToken = SecureSessionToken(
+          preferences,
+          _secureStorage,
+          runExclusive: Platform.isAndroid || Platform.isIOS
+              ? SessionTokenLock.instance.runExclusive
+              : null,
+        );
+      }
+      _preferences = preferences;
       _documentsDirectory = (await getApplicationDocumentsDirectory()).path;
       final appSupportDirectory = await getApplicationSupportDirectory();
       // Exclude Documents (SQLite, thumbnails, decrypted media) and Application
@@ -113,25 +127,30 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
       _sharedDocumentsMediaDirectory =
           _documentsDirectory + "/ente-shared-media";
       Directory(_sharedDocumentsMediaDirectory).createSync(recursive: true);
-      if (!_preferences.containsKey(tokenKey)) {
-        _logger.info(
-          "(for debugging) Token not found, deleting all secure storage data",
-        );
-        await _secureStorage.deleteAll();
-      } else {
-        _logger.info(
-          "(for debugging) Token found, loading secure storage data",
-        );
-        _key = await _secureStorage.read(key: keyKey);
+      await _sessionToken!.initialize(
+        resetSecureStorage: () => deleteSecureStorage(_secureStorage),
+      );
+      if (_sessionToken!.requiresLogout) {
+        await logout(autoLogout: true);
+        return;
+      }
+      if (getToken() != null) {
+        final token = getToken();
+        final key = await readSecureStorage(_secureStorage, keyKey);
+        if (getToken() != token) return;
+        _key = key;
         _logger.info(
           "(for debugging) Key loaded from secure storage, is null: ${_key == null}",
         );
-        _secretKey = await _secureStorage.read(key: secretKeyKey);
+        final secretKey = await readSecureStorage(_secureStorage, secretKeyKey);
+        if (getToken() != token) return;
+        _secretKey = secretKey;
         _logger.info(
           "(for debugging) Secret Key loaded from secure storage, is null: ${_secretKey == null}",
         );
         if (_key == null) {
           await logout(autoLogout: true);
+          return;
         }
         await _migrateSecurityStorageToFirstUnlock();
       }
@@ -139,23 +158,12 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
       _logger.info('User ID: ${getUserID()}');
     } catch (e, s) {
       _logger.severe("Configuration init failed", e, s);
-      // BadPaddingException can mean Android secure storage is inaccessible.
-      // https://github.com/mogol/flutter_secure_storage/issues/541
-      if (e is PlatformException) {
-        final PlatformException error = e;
-        if (error.code == 'notification_key_store') {
-          rethrow;
-        }
-        final bool isBadPaddingError =
-            error.toString().contains('BadPaddingException') ||
-            (error.message ?? '').contains('BadPaddingException');
-        if (isBadPaddingError) {
-          await logout(autoLogout: true);
-          return;
-        }
-      } else {
-        rethrow;
+      if (e is PlatformException &&
+          e.toString().contains('BadPaddingException')) {
+        await logout(autoLogout: true);
+        return;
       }
+      rethrow;
     }
   }
 
@@ -194,6 +202,14 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
 
   @override
   Future<void> logout({bool autoLogout = false}) async {
+    final loggedOut = await _sessionToken!.logout(
+      () => _clearAccount(autoLogout: autoLogout),
+      autoLogout: autoLogout,
+    );
+    if (loggedOut && !autoLogout) Bus.instance.fire(UserLoggedOutEvent());
+  }
+
+  Future<void> _clearAccount({required bool autoLogout}) async {
     _logger.info("Logging out, autoLogout: $autoLogout");
     MLService.instance.stopActiveRun(MlStopReason.logout);
     if (!autoLogout) {
@@ -220,10 +236,9 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
     }
     await _clearTempFolderOnLogout();
 
-    await _preferences.clear();
-    await _secureStorage.deleteAll();
+    await _sessionToken!.clearPreferences();
+    await deleteSecureStorage(_secureStorage);
     _key = null;
-    _cachedToken = null;
     _secretKey = null;
     _volatilePassword = null;
     clearAuthenticatedSession();
@@ -312,7 +327,6 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
       } catch (e) {
         _logger.info("BillingService not initialized", e);
       }
-      Bus.instance.fire(UserLoggedOutEvent());
     } else {
       await _preferences.setBool("auto_logout", true);
     }
@@ -361,8 +375,7 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
   }
 
   String? getToken() {
-    _cachedToken ??= _preferences.getString(tokenKey);
-    return _cachedToken;
+    return _sessionToken?.token;
   }
 
   @override
@@ -371,9 +384,9 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
   }
 
   Future<void> setToken(String token) async {
-    _cachedToken = token;
-    await _preferences.setString(tokenKey, token);
+    if (!await _sessionToken!.setToken(token)) return;
     await localSettings.setAppMode(AppMode.enteGallery);
+    if (getToken() != token) return;
     Bus.instance.fire(AppModeChangedEvent());
     Bus.instance.fire(SignedInEvent());
   }
@@ -504,18 +517,29 @@ class Configuration implements LockScreenHost, AccountDeletionHost {
   }
 
   Future<void> _migrateSecurityStorageToFirstUnlock() async {
-    _logger.info(
-      "(for debugging) Migrating secure storage to first unlock if needed",
-    );
-    final hasMigratedSecureStorage =
-        _preferences.getBool(hasMigratedSecureStorageKey) ?? false;
-    if (!hasMigratedSecureStorage && _key != null && _secretKey != null) {
-      _logger.info("(for debugging) Migrating secure storage to first unlock");
-      await _secureStorage.write(key: keyKey, value: _key);
-      await _secureStorage.write(key: secretKeyKey, value: _secretKey);
-      await _preferences.setBool(hasMigratedSecureStorageKey, true);
+    final token = getToken();
+    Future<void> migrate() async {
+      final storedToken = await SecureSessionToken.read(
+        _preferences,
+        _secureStorage,
+      );
+      if (token == null || storedToken != token) {
+        throw StateError("Session changed during configuration init");
+      }
+      final hasMigratedSecureStorage =
+          _preferences.getBool(hasMigratedSecureStorageKey) ?? false;
+      if (!hasMigratedSecureStorage && _key != null && _secretKey != null) {
+        await _secureStorage.write(key: keyKey, value: _key);
+        await _secureStorage.write(key: secretKeyKey, value: _secretKey);
+        await _preferences.setBool(hasMigratedSecureStorageKey, true);
+      }
     }
-    _logger.info("(for debugging) Migration check complete");
+
+    if (Platform.isAndroid || Platform.isIOS) {
+      await SessionTokenLock.instance.runExclusive(migrate);
+    } else {
+      await migrate();
+    }
   }
 
   Future<String> _getOrCreateAnonymousUserID() async {
