@@ -115,6 +115,23 @@ test.each(["classical", "post-quantum"])(
     },
 );
 
+test("Photos appends the collection key to a public album link as base58", async () => {
+    const collectionKey = Buffer.from(
+        Array.from({ length: 32 }, (_, i) => i + 1),
+    ).toString("base64");
+    expect(
+        await photos.publicAlbumShareURL(
+            "https://albums.ente.com/?t=token",
+            collectionKey,
+        ),
+    ).toBe(
+        "https://albums.ente.com/?t=token#4wBqpZM9xaSheZzJSMawUKKwhdpChKbZ5eu5ky4Vigw",
+    );
+    await expect(
+        photos.publicAlbumShareURL("https://albums.ente.com/?t=token", "AQID"),
+    ).rejects.toThrow(Error);
+});
+
 for (const [name, api] of [
     ["Photos", photos],
     ["Locker", locker],

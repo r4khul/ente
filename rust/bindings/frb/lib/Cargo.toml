@@ -3,12 +3,14 @@ name = "ente-frb-lib"
 edition.workspace = true
 
 [features]
+collections = ["dep:ente-collections"]
 contacts = ["dep:ente-contacts"]
 legacy = ["dep:ente-legacy"]
 locker = ["dep:ente-locker"]
 
 [dependencies]
 ente-accounts.workspace = true
+ente-collections = { workspace = true, optional = true }
 ente-contacts = { workspace = true, optional = true }
 ente-core.workspace = true
 ente-legacy = { workspace = true, optional = true }

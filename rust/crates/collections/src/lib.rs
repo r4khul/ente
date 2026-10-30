@@ -4,6 +4,14 @@ use ente_core::{
     Session, b64,
     crypto::{self, Key, Nonce, sealed, secretbox},
 };
+use url::Url;
+
+const HEX_KEY_FRAGMENT_MIN_LENGTH: usize = 50;
+
+pub struct PublicAlbumLink {
+    pub access_token: String,
+    pub collection_key: Key,
+}
 
 pub fn open_collection_key(
     session: &Session,
@@ -29,6 +37,41 @@ pub fn open_collection_key(
     Ok(Key::try_from_slice(&key)?)
 }
 
+pub fn public_album_share_url(public_url: &str, collection_key: &Key) -> String {
+    format!(
+        "{public_url}#{}",
+        bs58::encode(collection_key.as_bytes()).into_string()
+    )
+}
+
+pub fn parse_public_album_share_url(url: &str) -> Result<PublicAlbumLink> {
+    let url = Url::parse(url).map_err(|_| Error::InvalidPublicLink("malformed URL"))?;
+    let access_token = url
+        .query_pairs()
+        .find(|(name, value)| name == "t" && !value.is_empty())
+        .map(|(_, value)| value.into_owned())
+        .or_else(|| {
+            url.path_segments()?
+                .find(|segment| !segment.is_empty())
+                .map(str::to_owned)
+        })
+        .ok_or(Error::InvalidPublicLink("missing access token"))?;
+    let fragment = url
+        .fragment()
+        .filter(|fragment| !fragment.is_empty())
+        .ok_or(Error::InvalidPublicLink("missing collection key"))?;
+    let collection_key = if fragment.len() < HEX_KEY_FRAGMENT_MIN_LENGTH {
+        bs58::decode(fragment).into_vec().ok()
+    } else {
+        hex::decode(fragment).ok()
+    }
+    .ok_or(Error::InvalidPublicLink("undecodable collection key"))?;
+    Ok(PublicAlbumLink {
+        access_token,
+        collection_key: Key::try_from_slice(&collection_key)?,
+    })
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -47,6 +90,8 @@ pub enum Error {
     CursorDidNotAdvance(i64),
     #[error("invalid source page: {0}")]
     InvalidPage(&'static str),
+    #[error("invalid public album link: {0}")]
+    InvalidPublicLink(&'static str),
 }
 
 #[cfg(test)]
@@ -93,5 +138,54 @@ mod tests {
             open_collection_key(&session, 7, &b64::encode(&encrypted_shared_key), None).unwrap(),
             shared_key,
         );
+    }
+
+    const KEY_BYTES: [u8; 32] = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        26, 27, 28, 29, 30, 31, 32,
+    ];
+    const KEY_BASE58: &str = "4wBqpZM9xaSheZzJSMawUKKwhdpChKbZ5eu5ky4Vigw";
+    const KEY_HEX: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+
+    #[test]
+    fn share_url_round_trips_through_base58_fragment() {
+        let key = Key::try_from_slice(&KEY_BYTES).unwrap();
+        let url = public_album_share_url("https://albums.ente.com/?t=token", &key);
+        assert_eq!(
+            url,
+            format!("https://albums.ente.com/?t=token#{KEY_BASE58}")
+        );
+        let link = parse_public_album_share_url(&url).unwrap();
+        assert_eq!(link.access_token, "token");
+        assert_eq!(link.collection_key, key);
+    }
+
+    #[test]
+    fn parses_legacy_hex_fragment_and_path_segment_token() {
+        let key = Key::try_from_slice(&KEY_BYTES).unwrap();
+        let link =
+            parse_public_album_share_url(&format!("https://albums.ente.com/?t=token#{KEY_HEX}"))
+                .unwrap();
+        assert_eq!(link.collection_key, key);
+        let link =
+            parse_public_album_share_url(&format!("ente://albums.ente.com/token#{KEY_BASE58}"))
+                .unwrap();
+        assert_eq!(link.access_token, "token");
+        assert_eq!(link.collection_key, key);
+    }
+
+    #[test]
+    fn rejects_links_without_token_or_usable_key() {
+        for url in [
+            "not a url",
+            &format!("https://albums.ente.com/#{KEY_BASE58}"),
+            &format!("https://albums.ente.com/?t=#{KEY_BASE58}"),
+            "https://albums.ente.com/?t=token",
+            "https://albums.ente.com/?t=token#",
+            "https://albums.ente.com/?t=token#0OIl",
+            "https://albums.ente.com/?t=token#2VfUX",
+        ] {
+            assert!(parse_public_album_share_url(url).is_err(), "{url}");
+        }
     }
 }

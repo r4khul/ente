@@ -1,3 +1,4 @@
+use ente_core::{b64, crypto::Key};
 use wasm_bindgen::prelude::*;
 
 use crate::session::Session;
@@ -27,5 +28,16 @@ pub fn open_key(
             key_decryption_nonce.as_deref(),
         )?
         .as_bytes(),
+    ))
+}
+
+#[wasm_bindgen(js_name = collectionsPublicAlbumShareUrl)]
+pub fn public_album_share_url(public_url: &str, collection_key: &str) -> Result<String, Error> {
+    let collection_key = b64::decode(collection_key).map_err(ente_collections::Error::from)?;
+    let collection_key =
+        Key::try_from_slice(&collection_key).map_err(ente_collections::Error::from)?;
+    Ok(ente_collections::public_album_share_url(
+        public_url,
+        &collection_key,
     ))
 }
