@@ -540,3 +540,33 @@ const combined = (header: string, ciphertext: string) =>
         Buffer.from(header, "base64"),
         Buffer.from(ciphertext, "base64"),
     ]);
+
+test("Photos location radius checks and distances match the Rust crate", async () => {
+    const isWithinRadius = await photos.isWithinRadiusKm();
+    const equator = { latitude: 0, longitude: 0 };
+    expect(isWithinRadius(equator, equator, 111.16)).toBe(true);
+    expect(
+        isWithinRadius({ latitude: 0.999, longitude: 0 }, equator, 111.16),
+    ).toBe(true);
+    expect(
+        isWithinRadius({ latitude: 1.001, longitude: 0 }, equator, 111.16),
+    ).toBe(false);
+    expect(
+        isWithinRadius({ latitude: 0, longitude: -1 }, equator, 111.16),
+    ).toBe(true);
+    expect(
+        isWithinRadius({ latitude: 0, longitude: 1.001 }, equator, 111.16),
+    ).toBe(false);
+    const north = { latitude: 60, longitude: 0 };
+    expect(
+        isWithinRadius({ latitude: 61.5, longitude: 0 }, north, 111.16),
+    ).toBe(true);
+    expect(
+        isWithinRadius({ latitude: 60, longitude: 1.5 }, north, 111.16),
+    ).toBe(false);
+    expect(isWithinRadius(equator, equator, 0)).toBe(false);
+    const paris = { latitude: 48.8566, longitude: 2.3522 };
+    const london = { latitude: 51.5074, longitude: -0.1278 };
+    expect(await photos.distanceKm(paris, london)).toBeCloseTo(343.556, 2);
+    expect(await photos.distanceKm(paris, paris)).toBe(0);
+});
