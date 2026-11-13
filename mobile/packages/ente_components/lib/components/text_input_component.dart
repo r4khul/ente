@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:ente_components/hugeicons.dart';
 import 'package:ente_components/theme/colors.dart';
 import 'package:ente_components/theme/icon_sizes.dart';
+import 'package:ente_components/theme/motion.dart';
 import 'package:ente_components/theme/radii.dart';
 import 'package:ente_components/theme/spacing.dart';
 import 'package:ente_components/theme/text_styles.dart';
@@ -257,7 +258,9 @@ class _TextInputComponentState extends State<TextInputComponent> {
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: widget.isDisabled ? null : _focusNode.requestFocus,
-            child: Container(
+            child: AnimatedContainer(
+              duration: Motion.quick,
+              curve: Curves.easeOut,
               height: _isMultiline ? null : _kHeight,
               constraints: _isMultiline
                   ? const BoxConstraints(minHeight: _kHeight)
@@ -349,23 +352,42 @@ class _TextInputComponentState extends State<TextInputComponent> {
             ),
           ),
         ),
-        if (message != null) ...[
-          const SizedBox(height: Spacing.sm),
-          Row(
-            children: [
-              if (messageIcon != null) ...[
-                messageIcon,
-                const SizedBox(width: Spacing.sm),
-              ],
-              Expanded(
-                child: Text(
-                  message,
-                  style: TextStyles.mini.copyWith(color: messageColor),
-                ),
-              ),
-            ],
+        AnimatedSize(
+          duration: Motion.standard,
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: AnimatedSwitcher(
+            duration: Motion.standard,
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            layoutBuilder: (current, previous) => Stack(
+              alignment: Alignment.topLeft,
+              children: [...previous, ?current],
+            ),
+            child: message == null
+                ? const SizedBox(width: double.infinity)
+                : Padding(
+                    key: ValueKey((message, widget.messageType)),
+                    padding: const EdgeInsets.only(top: Spacing.sm),
+                    child: Row(
+                      children: [
+                        if (messageIcon != null) ...[
+                          messageIcon,
+                          const SizedBox(width: Spacing.sm),
+                        ],
+                        Expanded(
+                          child: Text(
+                            message,
+                            style: TextStyles.mini.copyWith(
+                              color: messageColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
           ),
-        ],
+        ),
       ],
     );
   }

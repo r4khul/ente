@@ -1,0 +1,1 @@
+- Smoothed how messages appear and disappear under text fields.
