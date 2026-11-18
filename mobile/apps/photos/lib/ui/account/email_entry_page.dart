@@ -66,16 +66,18 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isKeyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final terms = TextFieldTapRegion(
+      groupId: _emailController,
+      child: _getTOSAgreement(),
+    );
     return OnboardingPageScaffold(
       title: context.strings.createAccountTitle,
       illustration: OnboardingIllustration.login,
       showDeveloperSettingsTapArea: true,
-      body: _getBody(),
+      body: _getBody(terms: isKeyboardOpen ? terms : null),
       actions: [
-        TextFieldTapRegion(
-          groupId: _emailController,
-          child: _getTOSAgreement(),
-        ),
+        if (!isKeyboardOpen) terms,
         TextFieldTapRegion(
           groupId: _emailController,
           child: ButtonComponent(
@@ -86,7 +88,7 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
             onTap: _isFormValid() ? _submitCreateAccount : null,
           ),
         ),
-        if (MediaQuery.viewInsetsOf(context).bottom == 0)
+        if (!isKeyboardOpen)
           OnboardingAccountPrompt(
             question: context.strings.alreadyHaveAnAccount,
             actionLabel: context.strings.logInLabel,
@@ -101,7 +103,7 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
     );
   }
 
-  Widget _getBody() {
+  Widget _getBody({Widget? terms}) {
     return AutofillGroup(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -130,6 +132,7 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
                 ? TextInputComponentMessageType.success
                 : TextInputComponentMessageType.alert,
           ),
+          if (terms != null) ...[const SizedBox(height: Spacing.lg), terms],
           if (_showReferralSourceField) _getReferralSource(),
         ],
       ),
@@ -143,7 +146,7 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
         child: TextButton(
           key: const ValueKey("referralSourceLink"),
           style: TextButton.styleFrom(
-            foregroundColor: context.componentColors.textLighter,
+            foregroundColor: context.componentColors.textLight,
             padding: const EdgeInsets.symmetric(vertical: 14),
             textStyle: TextStyles.bodyLink,
           ),
@@ -184,17 +187,18 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
     if (!_isFormValid() || _isSubmitting) {
       return;
     }
+    final email = _email!;
     _isSubmitting = true;
     try {
       _config.resetVolatilePassword();
-      await UserService.instance.setEmail(_email!);
+      await UserService.instance.setEmail(email);
       await UserService.instance.setRefSource(
         await _referralSourceForSubmission(),
       );
       if (!mounted) return;
       await UserService.instance.sendOtt(
         context,
-        _email!,
+        email,
         isCreateAccountScreen: true,
         purpose: "signup",
       );

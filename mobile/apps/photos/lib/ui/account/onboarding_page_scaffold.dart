@@ -51,6 +51,7 @@ class OnboardingPageScaffold extends StatefulWidget {
     this.showBackButton = true,
     this.titleBarStyle = OnboardingTitleBarStyle.card,
     this.headerTrailing,
+    this.titleMaxLines = 2,
     this.titleTopPadding,
     this.isBodyCentered = false,
     this.pinActions = false,
@@ -73,6 +74,7 @@ class OnboardingPageScaffold extends StatefulWidget {
   final bool showBackButton;
   final OnboardingTitleBarStyle titleBarStyle;
   final Widget? headerTrailing;
+  final int? titleMaxLines;
   final double? titleTopPadding;
   final bool isBodyCentered;
 
@@ -604,8 +606,10 @@ class OnboardingPageScaffoldState extends State<OnboardingPageScaffold> {
     final title = Text(
       widget.title,
       textAlign: TextAlign.center,
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
+      maxLines: widget.titleMaxLines,
+      overflow: widget.titleMaxLines == null
+          ? TextOverflow.clip
+          : TextOverflow.ellipsis,
       style: TextStyles.display2.copyWith(color: colors.textBase),
     );
     final titleContent = widget.showDeveloperSettingsTapArea

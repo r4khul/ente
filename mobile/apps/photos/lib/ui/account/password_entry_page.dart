@@ -45,16 +45,19 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
   final _passwordFocusNode = FocusNode();
   final _confirmPasswordFocusNode = FocusNode();
   String? _volatilePassword;
-  String _passwordInInputBox = '';
-  String _passwordInInputConfirmationBox = '';
   double _passwordStrength = 0.0;
 
-  bool _passwordsMatch = false;
-  bool _isPasswordValid = false;
-  double? _shownPasswordStrength;
-  bool? _shownPasswordsMatch;
+  bool _showPasswordStrength = false;
+  bool _showConfirmPasswordValidation = false;
+  bool _isSettingPassword = false;
   Timer? _passwordStrengthTimer;
   Timer? _confirmPasswordTimer;
+
+  bool get _passwordsMatch =>
+      _passwordController1.text == _passwordController2.text;
+
+  bool get _isFormValid =>
+      _passwordStrength >= kMildPasswordStrengthThreshold && _passwordsMatch;
 
   @override
   void initState() {
@@ -92,8 +95,6 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
       title = context.strings.recoveryKey;
     }
 
-    final isFormValid = _passwordsMatch && _isPasswordValid;
-
     if (_volatilePassword != null) {
       return OnboardingPageScaffold(
         title: title,
@@ -105,6 +106,7 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
     if (widget.mode == PasswordEntryMode.set) {
       return OnboardingPageScaffold(
         title: title,
+        titleMaxLines: null,
         illustration: OnboardingIllustration.password,
         body: _getPasswordFields(),
         actions: [
@@ -114,8 +116,8 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
               key: const ValueKey("setPasswordButton"),
               label: context.strings.continueLabel,
               shouldShowSuccessState: false,
-              isDisabled: !isFormValid,
-              onTap: isFormValid ? _submitPassword : null,
+              isDisabled: !_isFormValid,
+              onTap: _isFormValid ? _submitPassword : null,
             ),
           ),
         ],
@@ -144,16 +146,24 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
         ),
         centerTitle: true,
       ),
-      body: _getBody(title: title, isFormValid: isFormValid),
+      body: _getBody(title: title),
     );
   }
 
   Future<void> _submitPassword() async {
-    if (!_passwordsMatch || !_isPasswordValid) {
+    if (!_isFormValid) {
       return;
     }
     if (widget.mode == PasswordEntryMode.set) {
-      await _showRecoveryCodeDialog(_passwordController1.text);
+      if (_isSettingPassword || ModalRoute.of(context)?.isCurrent == false) {
+        return;
+      }
+      _isSettingPassword = true;
+      try {
+        await _showRecoveryCodeDialog(_passwordController1.text);
+      } finally {
+        _isSettingPassword = false;
+      }
     } else {
       _updatePassword();
     }
@@ -161,7 +171,7 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
     FocusScope.of(context).unfocus();
   }
 
-  Widget _getBody({required String title, required bool isFormValid}) {
+  Widget _getBody({required String title}) {
     final colors = context.componentColors;
 
     return SafeArea(
@@ -215,8 +225,8 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
               const SizedBox(height: 24),
               ButtonComponent(
                 label: title,
-                isDisabled: !isFormValid,
-                onTap: isFormValid ? _submitPassword : null,
+                isDisabled: !_isFormValid,
+                onTap: _isFormValid ? _submitPassword : null,
               ),
               const SizedBox(height: 40),
             ],
@@ -233,12 +243,11 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
     TextInputComponentMessageType passwordMessageType =
         TextInputComponentMessageType.helper;
 
-    final shownPasswordStrength = _shownPasswordStrength;
-    if (_passwordInInputBox.isNotEmpty && shownPasswordStrength != null) {
-      if (shownPasswordStrength > kStrongPasswordStrengthThreshold) {
+    if (_showPasswordStrength) {
+      if (_passwordStrength > kStrongPasswordStrengthThreshold) {
         passwordMessage = context.strings.strongPassword;
         passwordMessageType = TextInputComponentMessageType.success;
-      } else if (shownPasswordStrength > kMildPasswordStrengthThreshold) {
+      } else if (_passwordStrength > kMildPasswordStrengthThreshold) {
         passwordMessage = context.strings.moderateStrength;
         passwordMessageType = TextInputComponentMessageType.alert;
       } else {
@@ -251,11 +260,9 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
     TextInputComponentMessageType confirmPasswordMessageType =
         TextInputComponentMessageType.helper;
 
-    final shownPasswordsMatch = _shownPasswordsMatch;
-    if (_passwordInInputConfirmationBox.isNotEmpty &&
-        _passwordInInputBox.isNotEmpty &&
-        shownPasswordsMatch != null) {
-      if (shownPasswordsMatch) {
+    if (_showConfirmPasswordValidation &&
+        _passwordController1.text.isNotEmpty) {
+      if (_passwordsMatch) {
         confirmPasswordMessage = context.strings.passwordsMatch;
         confirmPasswordMessageType = TextInputComponentMessageType.success;
       } else {
@@ -297,22 +304,14 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
             onChanged: (password) {
               _passwordStrengthTimer?.cancel();
               setState(() {
-                _passwordInInputBox = password;
                 _passwordStrength = estimatePasswordStrength(password);
-                _isPasswordValid =
-                    _passwordStrength >= kMildPasswordStrengthThreshold;
-                _passwordsMatch =
-                    _passwordInInputBox == _passwordInInputConfirmationBox;
-                if (password.isEmpty) _shownPasswordStrength = null;
-                if (_shownPasswordsMatch != null) {
-                  _shownPasswordsMatch = _passwordsMatch;
-                }
+                if (password.isEmpty) _showPasswordStrength = false;
               });
-              if (password.isEmpty) return;
+              if (password.isEmpty || _showPasswordStrength) return;
               _passwordStrengthTimer = Timer(const Duration(seconds: 1), () {
                 if (mounted) {
                   setState(() {
-                    _shownPasswordStrength = _passwordStrength;
+                    _showPasswordStrength = true;
                   });
                   _revealMessage(_passwordFieldKey, _passwordFocusNode);
                 }
@@ -333,26 +332,23 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
             autofillHints: const [],
             finishAutofillContextOnEditingComplete: true,
             shouldUnfocusOnClearOrSubmit: true,
-            onSubmit: _passwordsMatch && _isPasswordValid
-                ? (_) => _submitPassword()
-                : null,
+            onSubmit: _isFormValid ? (_) => _submitPassword() : null,
             message: confirmPasswordMessage,
             messageType: confirmPasswordMessageType,
-            onChanged: (cnfPassword) {
+            onChanged: (confirmation) {
               _confirmPasswordTimer?.cancel();
               setState(() {
-                _passwordInInputConfirmationBox = cnfPassword;
-                if (cnfPassword.isEmpty) _shownPasswordsMatch = null;
-                if (_passwordInInputBox.isNotEmpty) {
-                  _passwordsMatch =
-                      _passwordInInputBox == _passwordInInputConfirmationBox;
+                if (confirmation.isEmpty) {
+                  _showConfirmPasswordValidation = false;
                 }
               });
-              if (cnfPassword.isEmpty) return;
+              if (confirmation.isEmpty || _showConfirmPasswordValidation) {
+                return;
+              }
               _confirmPasswordTimer = Timer(const Duration(seconds: 1), () {
                 if (mounted) {
                   setState(() {
-                    _shownPasswordsMatch = _passwordsMatch;
+                    _showConfirmPasswordValidation = true;
                   });
                   _revealMessage(
                     _confirmPasswordFieldKey,

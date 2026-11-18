@@ -2,6 +2,8 @@ import "package:ente_base/models/accounts.dart";
 import "package:ente_components/ente_components.dart";
 import "package:ente_strings/ente_strings.dart";
 import "package:flutter/material.dart";
+import "package:flutter/rendering.dart";
+import "package:flutter/services.dart";
 import "package:flutter_test/flutter_test.dart";
 import "package:photos/ente_theme_data.dart";
 import "package:photos/ui/account/email_entry_page.dart";
@@ -30,9 +32,10 @@ void main() {
     }
   }
 
-  Widget app(Widget home) {
+  Widget app(Widget home, {Locale? locale}) {
     return MaterialApp(
       theme: lightThemeData,
+      locale: locale,
       localizationsDelegates: StringsLocalizations.localizationsDelegates,
       supportedLocales: StringsLocalizations.supportedLocales,
       home: home,
@@ -216,20 +219,41 @@ void main() {
     expect(tester.getTopLeft(fields.at(1)).dy, confirmTop);
 
     await tester.enterText(fields.at(1), "correct horse battery staple");
-    await settle(tester, 15);
+    await tester.pump();
     expect(
       find.text(context.strings.passwordsMatch).hitTestable(),
       findsOneWidget,
     );
     expect(tester.widget<ButtonComponent>(button).isDisabled, isFalse);
 
+    await tester.enterText(fields.at(1), "correct horse battery stapl");
+    await tester.pump();
+    expect(find.text(context.strings.passwordsMatch), findsNothing);
+    expect(find.text(context.strings.passwordsDontMatch), findsOneWidget);
+    expect(tester.widget<ButtonComponent>(button).isDisabled, isTrue);
+
+    await tester.enterText(fields.at(0), "a");
+    await tester.pump();
+    expect(find.text(context.strings.strongPassword), findsNothing);
+    expect(find.text(context.strings.weakStrength), findsOneWidget);
+    await tester.enterText(fields.at(0), "correct horse battery staple");
+    await tester.enterText(fields.at(1), "correct horse battery staple");
+    await settle(tester, 15);
+
     client.failure = const AccountsError.keyDerivation();
     await tester.tap(button);
+    await tester.testTextInput.receiveAction(TextInputAction.done);
     await settle(tester);
     expect(client.requests, [
       {"password": "correct horse battery staple"},
     ]);
     expect(find.text(context.strings.insecureDevice), findsOneWidget);
+
+    await tester.tap(find.byType(BottomSheetCloseButton));
+    await settle(tester);
+    await tester.tap(button);
+    await settle(tester);
+    expect(client.requests, hasLength(2));
     expect(tester.takeException(), isNull);
   });
 
@@ -249,5 +273,34 @@ void main() {
       hints,
       containsAll([AutofillHints.email, AutofillHints.newPassword]),
     );
+  });
+
+  testWidgets("set password title fits with large French text", (tester) async {
+    final font = FontLoader("packages/ente_components/Outfit")
+      ..addFont(
+        rootBundle.load("packages/ente_components/fonts/Outfit-SemiBold.ttf"),
+      );
+    await font.load();
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = const FakeViewPadding(top: 20);
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpWidget(
+      app(
+        const PasswordEntryPage(mode: PasswordEntryMode.set),
+        locale: const Locale("fr"),
+      ),
+    );
+    await settle(tester);
+
+    final context = tester.element(find.byType(PasswordEntryPage));
+    final title = find.text(context.strings.setPasswordTitle);
+    expect(
+      tester.renderObject<RenderParagraph>(title).didExceedMaxLines,
+      false,
+    );
+    expect(tester.takeException(), isNull);
   });
 }
