@@ -7,6 +7,7 @@ import "package:photos/ente_theme_data.dart";
 import "package:photos/ui/account/email_entry_page.dart";
 import "package:photos/ui/account/login_page.dart";
 import "package:photos/ui/account/ott_verification_page.dart";
+import "package:photos/ui/account/password_entry_page.dart";
 import "package:photos/ui/account/recovery_page.dart";
 import "package:photos/ui/components/base_bottom_sheet.dart";
 
@@ -134,7 +135,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets("sign-up enables submission only once the form is valid", (
+  testWidgets("sign-up enables once the email and terms are set", (
     tester,
   ) async {
     tester.view.physicalSize = const Size(375, 831);
@@ -144,24 +145,109 @@ void main() {
       app(const EmailEntryPage(showReferralSourceField: false)),
     );
     await settle(tester);
-    final fields = find.byType(TextField);
-    await tester.enterText(fields.at(0), "new@example.com");
-    await tester.enterText(fields.at(1), "correct horse battery staple");
-    await tester.enterText(fields.at(2), "correct horse battery staple");
+    await tester.enterText(find.byType(TextField), "new@example.com");
     await settle(tester, 15);
     final button = find.byKey(const ValueKey("createAccountButton"));
     expect(tester.widget<ButtonComponent>(button).isDisabled, isTrue);
 
-    await tester.ensureVisible(find.byType(CheckboxComponent));
     await tester.tap(find.byType(CheckboxComponent));
     await settle(tester);
     expect(tester.widget<ButtonComponent>(button).isDisabled, isFalse);
-
-    await tester.enterText(fields.at(2), "different");
-    await settle(tester, 15);
-    final context = tester.element(find.byType(EmailEntryPage));
-    expect(find.text(context.strings.passwordsDontMatch), findsOneWidget);
-    expect(tester.widget<ButtonComponent>(button).isDisabled, isTrue);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets("sign-up opens the referral question on demand", (tester) async {
+    tester.view.physicalSize = const Size(375, 831);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(app(const EmailEntryPage()));
+    await settle(tester);
+    final fields = find.byType(TextField);
+    final link = find.byKey(const ValueKey("referralSourceLink"));
+    expect(link, findsOneWidget);
+    await tester.showKeyboard(fields);
+    await settle(tester);
+
+    final gesture = await tester.startGesture(tester.getCenter(link));
+    await tester.pump();
+    expect(tester.widget<TextField>(fields).focusNode!.hasFocus, isTrue);
+    await gesture.up();
+    await settle(tester);
+    expect(link, findsNothing);
+    expect(fields, findsNWidgets(2));
+    expect(tester.widget<TextField>(fields.at(0)).focusNode!.hasFocus, isFalse);
+    expect(tester.widget<TextField>(fields.at(1)).focusNode!.hasFocus, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets("set password confirms the password and continues", (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = const FakeViewPadding(top: 20);
+    addTearDown(tester.view.reset);
+    client.requests.clear();
+    await tester.pumpWidget(
+      app(const PasswordEntryPage(mode: PasswordEntryMode.set)),
+    );
+    await settle(tester);
+    final context = tester.element(find.byType(PasswordEntryPage));
+    final fields = find.byType(TextField);
+    final button = find.byKey(const ValueKey("setPasswordButton"));
+    expect(tester.widget<ButtonComponent>(button).isDisabled, isTrue);
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 291);
+    await tester.showKeyboard(fields.at(0));
+    await tester.enterText(fields.at(0), "correct horse battery staple");
+    await tester.testTextInput.receiveAction(TextInputAction.next);
+    await settle(tester);
+    expect(tester.widget<TextField>(fields.at(1)).focusNode!.hasFocus, isTrue);
+
+    await tester.enterText(fields.at(1), "correct horse battery stapl");
+    await settle(tester, 15);
+    expect(
+      find.text(context.strings.passwordsDontMatch).hitTestable(),
+      findsOneWidget,
+    );
+    final confirmTop = tester.getTopLeft(fields.at(1)).dy;
+    await tester.enterText(fields.at(1), "correct horse battery stap");
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(tester.getTopLeft(fields.at(1)).dy, confirmTop);
+
+    await tester.enterText(fields.at(1), "correct horse battery staple");
+    await settle(tester, 15);
+    expect(
+      find.text(context.strings.passwordsMatch).hitTestable(),
+      findsOneWidget,
+    );
+    expect(tester.widget<ButtonComponent>(button).isDisabled, isFalse);
+
+    client.failure = const AccountsError.keyDerivation();
+    await tester.tap(button);
+    await settle(tester);
+    expect(client.requests, [
+      {"password": "correct horse battery staple"},
+    ]);
+    expect(find.text(context.strings.insecureDevice), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets("set password pairs the new password with the account email", (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      app(const PasswordEntryPage(mode: PasswordEntryMode.set)),
+    );
+    await settle(tester);
+    final group = tester.state<AutofillGroupState>(find.byType(AutofillGroup));
+    final hints = group.autofillClients.expand(
+      (client) =>
+          client.textInputConfiguration.autofillConfiguration.autofillHints,
+    );
+    expect(
+      hints,
+      containsAll([AutofillHints.email, AutofillHints.newPassword]),
+    );
   });
 }

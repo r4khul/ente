@@ -1,0 +1,1 @@
+- Simplified sign-up. Enter your email first, then set your password after you verify it.
