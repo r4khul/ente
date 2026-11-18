@@ -237,9 +237,11 @@ class _TextInputComponentState extends State<TextInputComponent> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                widget.label!,
-                style: TextStyles.body.copyWith(color: _labelColor(colors)),
+              Flexible(
+                child: Text(
+                  widget.label!,
+                  style: TextStyles.body.copyWith(color: _labelColor(colors)),
+                ),
               ),
               if (widget.isRequired) ...[
                 const SizedBox(width: 2),

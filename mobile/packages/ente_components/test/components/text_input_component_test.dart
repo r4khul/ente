@@ -34,6 +34,22 @@ void main() {
     expect(focusNode.hasFocus, isFalse);
   });
 
+  testWidgets("TextInputComponent wraps a long label", (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        const SizedBox(
+          width: 200,
+          child: TextInputComponent(
+            label: "How did you hear about Ente? (optional)",
+            isRequired: true,
+          ),
+        ),
+      ),
+    );
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     "TextInputComponent forwards read-only state while staying enabled",
     (tester) async {
