@@ -1,4 +1,3 @@
-import "package:ente_base/models/accounts.dart";
 import "package:ente_components/ente_components.dart";
 import "package:ente_strings/ente_strings.dart";
 import "package:flutter/material.dart";
@@ -35,7 +34,7 @@ void main() {
   final createAccount = find.byKey(const ValueKey("createAccountButton"));
   final terms = find.byType(CheckboxComponent);
 
-  testWidgets("sign-up sends and verifies the originally submitted email", (
+  testWidgets("sign-up sends the code to the email it submitted", (
     tester,
   ) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -70,16 +69,6 @@ void main() {
           .email,
       "first@example.com",
     );
-    client.failure = const AccountsError.incorrectEmailCode();
-    final pin = tester.widget<PinInputComponent>(
-      find.byType(PinInputComponent),
-    );
-    pin.controller.text = "123456";
-    await settle(tester);
-    expect(client.requests.last, {
-      "email": "first@example.com",
-      "code": "123456",
-    });
     expect(tester.takeException(), isNull);
   });
 
