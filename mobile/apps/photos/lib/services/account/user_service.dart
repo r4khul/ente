@@ -47,6 +47,8 @@ class UserService {
   static const keyHasEnabledTwoFactor = "has_enabled_two_factor";
   static const keyUserDetails = "user_details";
   static const kReferralSource = "referral_source";
+  static const kShouldAskReferralSource = "should_ask_referral_source";
+  static const kPendingReferralSource = "pending_referral_source";
   static const kIsEmailMFAEnabled = "is_email_mfa_enabled";
   static const _publicKeyBatchSize = 10;
 
@@ -91,6 +93,7 @@ class UserService {
     });
     _preferences = await SharedPreferences.getInstance();
     if (Configuration.instance.isLoggedIn() && !isLocalGalleryMode) {
+      unawaited(syncPendingReferralSource());
       Future.delayed(
         const Duration(seconds: 5),
         () => {setTwoFactor(fetchTwoFactorStatus: true).ignore()},
@@ -495,6 +498,35 @@ class UserService {
 
   String _getRefSource() {
     return _preferences.getString(kReferralSource) ?? "";
+  }
+
+  bool get shouldAskReferralSource =>
+      _preferences.getBool(kShouldAskReferralSource) ?? false;
+
+  Future<void> setShouldAskReferralSource(bool shouldAsk) async {
+    await _preferences.setBool(kShouldAskReferralSource, shouldAsk);
+  }
+
+  Future<void> submitReferralSource(String source) async {
+    await _preferences.setString(kPendingReferralSource, source);
+    await syncPendingReferralSource();
+  }
+
+  Future<void> syncPendingReferralSource() async {
+    final source = _preferences.getString(kPendingReferralSource);
+    if (source == null) {
+      return;
+    }
+    try {
+      await _gateway.setSource(source);
+    } catch (e, s) {
+      _logger.warning("Failed to save referral source", e, s);
+      final statusCode = e is DioException ? e.response?.statusCode : null;
+      if (statusCode == null || statusCode == 429 || statusCode >= 500) {
+        return;
+      }
+    }
+    await _preferences.remove(kPendingReferralSource);
   }
 
   Future<void> changeEmail(
@@ -1143,6 +1175,11 @@ class UserService {
       await Configuration.instance.setToken(responseData["token"]);
     }
     final isSignUp = responseData["encryptedToken"] == null;
+    await setShouldAskReferralSource(
+      isSignUp &&
+          _getRefSource().isEmpty &&
+          !await installSourceService.hasInstallSource(),
+    );
     unawaited(installSourceService.autoAttributeSource(isSignUp: isSignUp));
 
     // Initialize shared feed cutoff at login; feed path keeps the same fallback.

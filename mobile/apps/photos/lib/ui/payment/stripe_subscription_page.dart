@@ -22,6 +22,7 @@ import 'package:photos/ui/components/buttons/button_widget.dart';
 import 'package:photos/ui/family/family_plan_page.dart';
 import 'package:photos/ui/notification/toast.dart';
 import 'package:photos/ui/payment/payment_web_page.dart';
+import "package:photos/ui/payment/subscription.dart";
 import 'package:photos/ui/payment/subscription_common_widgets.dart';
 import "package:photos/ui/payment/subscription_page_scaffold.dart";
 import 'package:photos/ui/payment/subscription_plan_widget.dart';
@@ -130,7 +131,7 @@ class _StripeSubscriptionPageState extends State<StripeSubscriptionPage> {
         _currentSubscription!.isValid() &&
         _currentSubscription!.productID != freeProductID) {
       if (!mounted) return;
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      closeOnboardingSubscription(context);
     }
   }
 
@@ -594,7 +595,7 @@ class _StripeSubscriptionPageState extends State<StripeSubscriptionPage> {
     }
 
     if (selectedPlanProductID == freeProductID) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      closeOnboardingSubscription(context);
       Bus.instance.fire(SubscriptionPurchasedEvent());
       unawaited(
         _billingService.verifySubscription(

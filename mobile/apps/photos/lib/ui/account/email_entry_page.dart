@@ -5,7 +5,6 @@ import "package:ente_components/ente_components.dart";
 import "package:ente_strings/ente_strings.dart";
 import 'package:flutter/material.dart';
 import 'package:photos/core/configuration.dart';
-import "package:photos/service_locator.dart";
 import 'package:photos/services/account/user_service.dart';
 import "package:photos/ui/account/login_page.dart";
 import "package:photos/ui/account/onboarding_page_scaffold.dart";
@@ -13,13 +12,8 @@ import 'package:photos/ui/common/web_page.dart';
 import "package:styled_text/styled_text.dart";
 
 class EmailEntryPage extends StatefulWidget {
-  const EmailEntryPage({
-    super.key,
-    this.showReferralSourceField = true,
-    this.referralSource,
-  });
+  const EmailEntryPage({super.key, this.referralSource});
 
-  final bool showReferralSourceField;
   final String? referralSource;
 
   @override
@@ -29,25 +23,17 @@ class EmailEntryPage extends StatefulWidget {
 class _EmailEntryPageState extends State<EmailEntryPage> {
   final _config = Configuration.instance;
   final _emailController = TextEditingController();
-  final _referralFocusNode = FocusNode();
 
   String? _email;
-  String _referralSource = '';
   bool _emailIsValid = false;
   bool _showEmailValidation = false;
   bool _hasAgreedToTOS = false;
-  bool _hasInstallSource = false;
-  bool _isReferralExpanded = false;
   bool _isSubmitting = false;
   Timer? _emailValidationTimer;
 
   @override
   void initState() {
     super.initState();
-    _referralSource = widget.referralSource?.trim() ?? '';
-    if (widget.showReferralSourceField) {
-      unawaited(_updateReferralSourceFieldVisibility());
-    }
     final storedEmail = _config.getEmail();
     if (storedEmail != null && storedEmail.isNotEmpty) {
       _email = storedEmail;
@@ -60,7 +46,6 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
   void dispose() {
     _emailValidationTimer?.cancel();
     _emailController.dispose();
-    _referralFocusNode.dispose();
     super.dispose();
   }
 
@@ -133,55 +118,10 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
                 : TextInputComponentMessageType.alert,
           ),
           if (terms != null) ...[const SizedBox(height: Spacing.lg), terms],
-          if (_showReferralSourceField) _getReferralSource(),
         ],
       ),
     );
   }
-
-  Widget _getReferralSource() {
-    if (!_isReferralExpanded) {
-      return TextFieldTapRegion(
-        groupId: _emailController,
-        child: TextButton(
-          key: const ValueKey("referralSourceLink"),
-          style: TextButton.styleFrom(
-            foregroundColor: context.componentColors.textLight,
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            textStyle: TextStyles.bodyLink,
-          ),
-          onPressed: _expandReferralSource,
-          child: Text(context.strings.hearUsWhereOptionalTitle),
-        ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.only(top: Spacing.xl),
-      child: TextInputComponent(
-        label: context.strings.hearUsWhereOptionalTitle,
-        focusNode: _referralFocusNode,
-        groupId: _emailController,
-        autocorrect: false,
-        shouldUnfocusOnClearOrSubmit: true,
-        onSubmit: _isFormValid() ? (_) => _submitCreateAccount() : null,
-        onChanged: (value) {
-          _referralSource = value.trim();
-        },
-      ),
-    );
-  }
-
-  void _expandReferralSource() {
-    setState(() => _isReferralExpanded = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _referralFocusNode.requestFocus();
-    });
-  }
-
-  bool get _showReferralSourceField =>
-      widget.showReferralSourceField && !_hasInstallSource;
-
-  String get _routeSource => widget.referralSource?.trim() ?? '';
 
   Future<void> _submitCreateAccount() async {
     if (!_isFormValid() || _isSubmitting) {
@@ -193,7 +133,7 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
       _config.resetVolatilePassword();
       await UserService.instance.setEmail(email);
       await UserService.instance.setRefSource(
-        await _referralSourceForSubmission(),
+        widget.referralSource?.trim() ?? '',
       );
       if (!mounted) return;
       await UserService.instance.sendOtt(
@@ -204,31 +144,6 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
       );
     } finally {
       _isSubmitting = false;
-    }
-  }
-
-  Future<void> _updateReferralSourceFieldVisibility() async {
-    final hasInstallSource = await installSourceService.hasInstallSource();
-    _setHasInstallSource(hasInstallSource);
-  }
-
-  Future<String> _referralSourceForSubmission() async {
-    if (!widget.showReferralSourceField) {
-      return _routeSource;
-    }
-    if (_hasInstallSource) {
-      return _routeSource;
-    }
-    final hasInstallSource = await installSourceService.hasInstallSource();
-    _setHasInstallSource(hasInstallSource);
-    return hasInstallSource ? _routeSource : _referralSource;
-  }
-
-  void _setHasInstallSource(bool hasInstallSource) {
-    if (mounted && hasInstallSource != _hasInstallSource) {
-      setState(() {
-        _hasInstallSource = hasInstallSource;
-      });
     }
   }
 

@@ -8,6 +8,7 @@ import "package:flutter/foundation.dart";
 import 'package:flutter/material.dart';
 import "package:logging/logging.dart";
 import 'package:photos/core/configuration.dart';
+import "package:photos/service_locator.dart";
 import 'package:photos/services/account/user_service.dart';
 import "package:photos/ui/account/email_entry_page.dart";
 import "package:photos/ui/account/login_pwd_verification_page.dart";
@@ -77,9 +78,13 @@ class _LoginPageState extends State<LoginPage> {
           actionLabel: context.strings.signUp,
           onTap: () async {
             FocusScope.of(context).unfocus();
-            await Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const EmailEntryPage()));
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => EmailEntryPage(
+                  referralSource: isLocalGalleryMode ? "Offline" : null,
+                ),
+              ),
+            );
           },
         ),
       ],

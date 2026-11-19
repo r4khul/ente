@@ -1906,10 +1906,22 @@
   "guestView": "Guest view",
   "guestViewEnablePreSteps": "To enable guest view, please setup device passcode or screen lock in your system settings.",
   "happyBirthday": "Happy birthday! 🥳",
+  "hearUsWhereAppStore": "App store",
+  "@hearUsWhereAppStore": {
+    "description": "Answer to how the user heard about Ente: any store where apps are downloaded, such as the App Store, Google Play or F-Droid. Not a brand name"
+  },
+  "hearUsWhereFriend": "Friend or family",
+  "hearUsWhereMedia": "Blog, video or podcast",
   "hearUsWhereOptionalTitle": "How did you hear about Ente? (optional)",
   "@hearUsWhereOptionalTitle": {
     "description": "Title asking how user heard about Ente"
   },
+  "hearUsWhereOther": "Other",
+  "@hearUsWhereOther": {
+    "description": "Placeholder of the text field for typing a different answer to how the user heard about Ente"
+  },
+  "hearUsWhereSearch": "Search or AI assistant",
+  "hearUsWhereSocialMedia": "Social media or forums",
   "hearUsWhereTitle": "How did you hear about Ente?",
   "help": "Help",
   "helpAndSupport": "Help & Support",

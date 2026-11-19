@@ -116,10 +116,8 @@ class _NameFaceBannerState extends State<NameFaceBanner> {
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => const EmailEntryPage(
-                      showReferralSourceField: false,
-                      referralSource: "Offline",
-                    ),
+                    builder: (_) =>
+                        const EmailEntryPage(referralSource: "Offline"),
                   ),
                 );
               },

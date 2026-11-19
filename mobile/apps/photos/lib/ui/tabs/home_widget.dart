@@ -56,6 +56,7 @@ import "package:photos/services/sync/remote_sync_service.dart";
 import "package:photos/services/update_service.dart";
 import "package:photos/states/user_details_state.dart";
 import "package:photos/theme/ente_theme.dart";
+import "package:photos/ui/account/referral_source_page.dart";
 import "package:photos/ui/collections/collection_action_sheet.dart";
 import "package:photos/ui/components/buttons/button_widget.dart";
 import "package:photos/ui/components/models/button_type.dart";
@@ -179,6 +180,16 @@ class _HomeWidgetState extends State<HomeWidget> {
     }
   }
 
+  void _askReferralSourceIfPending() {
+    if (!mounted ||
+        !Configuration.instance.hasConfiguredAccount() ||
+        !UserService.instance.shouldAskReferralSource) {
+      return;
+    }
+    unawaited(UserService.instance.setShouldAskReferralSource(false));
+    unawaited(Navigator.of(context).push(ReferralSourcePage.route()));
+  }
+
   @override
   void initState() {
     _logger.info("initstate");
@@ -239,6 +250,7 @@ class _HomeWidgetState extends State<HomeWidget> {
       unawaited(localSettings.setLocalGalleryOnboardingPending(false));
       setState(() {});
       _handleMissingRecoveryKey();
+      _askReferralSourceIfPending();
       if (!isLocalGalleryMode) {
         flagService.flags;
       }
@@ -364,6 +376,7 @@ class _HomeWidgetState extends State<HomeWidget> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _handleMissingRecoveryKey();
+        _askReferralSourceIfPending();
       }
     });
   }

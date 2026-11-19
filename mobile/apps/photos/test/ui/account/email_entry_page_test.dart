@@ -42,9 +42,7 @@ void main() {
     tester.view.viewInsets = const FakeViewPadding(bottom: 300);
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(
-      app(const EmailEntryPage(showReferralSourceField: false)),
-    );
+    await tester.pumpWidget(app(const EmailEntryPage()));
     await settle(tester);
     final email = find.byType(TextField);
     await tester.enterText(email, "first@example.com");

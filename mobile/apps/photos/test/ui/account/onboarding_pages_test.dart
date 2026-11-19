@@ -144,9 +144,7 @@ void main() {
     tester.view.physicalSize = const Size(375, 831);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      app(const EmailEntryPage(showReferralSourceField: false)),
-    );
+    await tester.pumpWidget(app(const EmailEntryPage()));
     await settle(tester);
     await tester.enterText(find.byType(TextField), "new@example.com");
     await settle(tester, 15);
@@ -156,30 +154,6 @@ void main() {
     await tester.tap(find.byType(CheckboxComponent));
     await settle(tester);
     expect(tester.widget<ButtonComponent>(button).isDisabled, isFalse);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets("sign-up opens the referral question on demand", (tester) async {
-    tester.view.physicalSize = const Size(375, 831);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(app(const EmailEntryPage()));
-    await settle(tester);
-    final fields = find.byType(TextField);
-    final link = find.byKey(const ValueKey("referralSourceLink"));
-    expect(link, findsOneWidget);
-    await tester.showKeyboard(fields);
-    await settle(tester);
-
-    final gesture = await tester.startGesture(tester.getCenter(link));
-    await tester.pump();
-    expect(tester.widget<TextField>(fields).focusNode!.hasFocus, isTrue);
-    await gesture.up();
-    await settle(tester);
-    expect(link, findsNothing);
-    expect(fields, findsNWidgets(2));
-    expect(tester.widget<TextField>(fields.at(0)).focusNode!.hasFocus, isFalse);
-    expect(tester.widget<TextField>(fields.at(1)).focusNode!.hasFocus, isTrue);
     expect(tester.takeException(), isNull);
   });
 

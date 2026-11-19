@@ -28,6 +28,7 @@ import 'package:photos/ui/components/dialog_widget.dart';
 import 'package:photos/ui/components/models/button_type.dart';
 import 'package:photos/ui/family/family_plan_page.dart';
 import 'package:photos/ui/notification/toast.dart';
+import "package:photos/ui/payment/subscription.dart";
 import 'package:photos/ui/payment/subscription_common_widgets.dart';
 import "package:photos/ui/payment/subscription_page_scaffold.dart";
 import 'package:photos/ui/payment/subscription_plan_widget.dart';
@@ -127,7 +128,7 @@ class _StoreSubscriptionPageState extends State<StoreSubscriptionPage> {
               await _dialog.hide();
             }
             if (mounted && widget.isOnboarding) {
-              Navigator.of(context).popUntil((route) => route.isFirst);
+              closeOnboardingSubscription(context);
             }
           } on SubscriptionAlreadyClaimedError catch (e) {
             _logger.warning("subscription is already claimed ", e);
@@ -676,7 +677,7 @@ class _StoreSubscriptionPageState extends State<StoreSubscriptionPage> {
     }
 
     if (selectedProductID == freeProductID) {
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      closeOnboardingSubscription(context);
       Bus.instance.fire(SubscriptionPurchasedEvent());
       unawaited(
         _billingService.verifySubscription(

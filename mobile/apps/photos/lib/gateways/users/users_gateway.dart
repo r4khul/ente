@@ -115,6 +115,10 @@ class UsersGateway {
     await _enteDio.put("/users/email-mfa", data: {"isEnabled": isEnabled});
   }
 
+  Future<void> setSource(String source) async {
+    await _enteDio.put("/users/source", data: {"source": source});
+  }
+
   Future<String?> getPaymentToken() async {
     final response = await _enteDio.get("/users/payment-token");
     return response.data["paymentToken"] as String?;

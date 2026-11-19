@@ -1,0 +1,1 @@
+- Sign-up no longer asks how you heard about Ente. We ask once afterwards with one-tap answers, and you can skip it.
