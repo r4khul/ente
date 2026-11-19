@@ -4,7 +4,6 @@ import 'package:email_validator/email_validator.dart';
 import "package:ente_components/ente_components.dart";
 import "package:ente_strings/ente_strings.dart";
 import 'package:flutter/material.dart';
-import 'package:password_strength/password_strength.dart';
 import 'package:photos/core/configuration.dart';
 import "package:photos/service_locator.dart";
 import 'package:photos/services/account/user_service.dart';
@@ -28,30 +27,19 @@ class EmailEntryPage extends StatefulWidget {
 }
 
 class _EmailEntryPageState extends State<EmailEntryPage> {
-  static const kMildPasswordStrengthThreshold = 0.4;
-  static const kStrongPasswordStrengthThreshold = 0.7;
-
   final _config = Configuration.instance;
   final _emailController = TextEditingController();
-  final _passwordController1 = TextEditingController();
-  final _passwordController2 = TextEditingController();
+  final _referralFocusNode = FocusNode();
 
   String? _email;
-  String? _password;
-  String _cnfPassword = '';
   String _referralSource = '';
-  double _passwordStrength = 0.0;
   bool _emailIsValid = false;
   bool _showEmailValidation = false;
   bool _hasAgreedToTOS = false;
   bool _hasInstallSource = false;
-  bool _passwordsMatch = false;
-  bool _passwordIsValid = false;
-  bool _showPasswordStrength = false;
-  bool _showConfirmPasswordValidation = false;
+  bool _isReferralExpanded = false;
+  bool _isSubmitting = false;
   Timer? _emailValidationTimer;
-  Timer? _passwordStrengthTimer;
-  Timer? _confirmPasswordTimer;
 
   @override
   void initState() {
@@ -71,79 +59,51 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
   @override
   void dispose() {
     _emailValidationTimer?.cancel();
-    _passwordStrengthTimer?.cancel();
-    _confirmPasswordTimer?.cancel();
     _emailController.dispose();
-    _passwordController1.dispose();
-    _passwordController2.dispose();
+    _referralFocusNode.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final isKeyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final terms = TextFieldTapRegion(
+      groupId: _emailController,
+      child: _getTOSAgreement(),
+    );
     return OnboardingPageScaffold(
       title: context.strings.createAccountTitle,
-      illustration: OnboardingIllustration.signUp,
-      headerHeight: OnboardingPageScaffold.compactHeaderHeight,
+      illustration: OnboardingIllustration.login,
       showDeveloperSettingsTapArea: true,
-      body: _getBody(),
+      body: _getBody(terms: isKeyboardOpen ? terms : null),
       actions: [
-        ButtonComponent(
-          key: const ValueKey("createAccountButton"),
-          label: context.strings.createAccountTitle,
-          shouldShowSuccessState: false,
-          isDisabled: !_isFormValid(),
-          onTap: _isFormValid() ? _submitCreateAccount : null,
+        if (!isKeyboardOpen) terms,
+        TextFieldTapRegion(
+          groupId: _emailController,
+          child: ButtonComponent(
+            key: const ValueKey("createAccountButton"),
+            label: context.strings.createAccountTitle,
+            shouldShowSuccessState: false,
+            isDisabled: !_isFormValid(),
+            onTap: _isFormValid() ? _submitCreateAccount : null,
+          ),
         ),
-        OnboardingAccountPrompt(
-          question: context.strings.alreadyHaveAnAccount,
-          actionLabel: context.strings.logInLabel,
-          onTap: () async {
-            FocusScope.of(context).unfocus();
-            await Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const LoginPage()));
-          },
-        ),
+        if (!isKeyboardOpen)
+          OnboardingAccountPrompt(
+            question: context.strings.alreadyHaveAnAccount,
+            actionLabel: context.strings.logInLabel,
+            onTap: () async {
+              FocusScope.of(context).unfocus();
+              await Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const LoginPage()));
+            },
+          ),
       ],
     );
   }
 
-  Widget _getBody() {
-    String? passwordMessage;
-    TextInputComponentMessageType passwordMessageType =
-        TextInputComponentMessageType.helper;
-
-    if (_password != null && _password!.isNotEmpty && _showPasswordStrength) {
-      if (_passwordStrength > kStrongPasswordStrengthThreshold) {
-        passwordMessage = context.strings.strongPassword;
-        passwordMessageType = TextInputComponentMessageType.success;
-      } else if (_passwordStrength > kMildPasswordStrengthThreshold) {
-        passwordMessage = context.strings.moderateStrength;
-        passwordMessageType = TextInputComponentMessageType.alert;
-      } else {
-        passwordMessage = context.strings.weakStrength;
-        passwordMessageType = TextInputComponentMessageType.alert;
-      }
-    }
-
-    String? confirmPasswordMessage;
-    TextInputComponentMessageType confirmPasswordMessageType =
-        TextInputComponentMessageType.helper;
-
-    if (_cnfPassword.isNotEmpty &&
-        _password != null &&
-        _password!.isNotEmpty &&
-        _showConfirmPasswordValidation) {
-      if (_passwordsMatch) {
-        confirmPasswordMessage = context.strings.passwordsMatch;
-        confirmPasswordMessageType = TextInputComponentMessageType.success;
-      } else {
-        confirmPasswordMessage = context.strings.passwordsDontMatch;
-        confirmPasswordMessageType = TextInputComponentMessageType.alert;
-      }
-    }
-
+  Widget _getBody({Widget? terms}) {
     return AutofillGroup(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -153,10 +113,13 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
             label: context.strings.email,
             hintText: context.strings.emailHint,
             controller: _emailController,
+            groupId: _emailController,
             keyboardType: TextInputType.emailAddress,
             autofillHints: const [AutofillHints.email],
             autocorrect: false,
             isRequired: true,
+            shouldUnfocusOnClearOrSubmit: true,
+            onSubmit: _isFormValid() ? (_) => _submitCreateAccount() : null,
             onChanged: _onEmailChanged,
             message: _showEmailValidation
                 ? _emailIsValid
@@ -169,87 +132,50 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
                 ? TextInputComponentMessageType.success
                 : TextInputComponentMessageType.alert,
           ),
-          const SizedBox(height: Spacing.xl),
-          TextInputComponent(
-            label: context.strings.password,
-            hintText: context.strings.enterYourPassword,
-            controller: _passwordController1,
-            isPasswordInput: true,
-            isRequired: true,
-            autocorrect: false,
-            autofillHints: const [AutofillHints.newPassword],
-            message: passwordMessage,
-            messageType: passwordMessageType,
-            onChanged: (password) {
-              if (password != _password) {
-                _passwordStrengthTimer?.cancel();
-                setState(() {
-                  _password = password;
-                  _passwordStrength = estimatePasswordStrength(password);
-                  _passwordIsValid =
-                      _passwordStrength >= kMildPasswordStrengthThreshold;
-                  _passwordsMatch = _password == _cnfPassword;
-                  _showPasswordStrength = false;
-                });
-                _passwordStrengthTimer = Timer(const Duration(seconds: 1), () {
-                  if (mounted) {
-                    setState(() {
-                      _showPasswordStrength = true;
-                    });
-                  }
-                });
-              }
-            },
-          ),
-          const SizedBox(height: Spacing.xl),
-          TextInputComponent(
-            label: context.strings.confirmPassword,
-            hintText: context.strings.reEnterPassword,
-            controller: _passwordController2,
-            isPasswordInput: true,
-            isRequired: true,
-            autocorrect: false,
-            autofillHints: const [],
-            finishAutofillContextOnEditingComplete: true,
-            shouldUnfocusOnClearOrSubmit: true,
-            onSubmit: _isFormValid() ? (_) => _submitCreateAccount() : null,
-            message: confirmPasswordMessage,
-            messageType: confirmPasswordMessageType,
-            onChanged: (cnfPassword) {
-              _confirmPasswordTimer?.cancel();
-              setState(() {
-                _cnfPassword = cnfPassword;
-                _showConfirmPasswordValidation = false;
-                if (_password != null && _password!.isNotEmpty) {
-                  _passwordsMatch = _password == _cnfPassword;
-                }
-              });
-              _confirmPasswordTimer = Timer(const Duration(seconds: 1), () {
-                if (mounted) {
-                  setState(() {
-                    _showConfirmPasswordValidation = true;
-                  });
-                }
-              });
-            },
-          ),
-          if (_showReferralSourceField) ...[
-            const SizedBox(height: Spacing.xl),
-            TextInputComponent(
-              label: context.strings.hearUsWhereTitle,
-              autocorrect: false,
-              shouldUnfocusOnClearOrSubmit: true,
-              onSubmit: _isFormValid() ? (_) => _submitCreateAccount() : null,
-              onChanged: (value) {
-                _referralSource = value.trim();
-              },
-            ),
-          ],
-          const SizedBox(height: Spacing.xl),
-          _getTOSAgreement(),
+          if (terms != null) ...[const SizedBox(height: Spacing.lg), terms],
+          if (_showReferralSourceField) _getReferralSource(),
         ],
       ),
     );
+  }
+
+  Widget _getReferralSource() {
+    if (!_isReferralExpanded) {
+      return TextFieldTapRegion(
+        groupId: _emailController,
+        child: TextButton(
+          key: const ValueKey("referralSourceLink"),
+          style: TextButton.styleFrom(
+            foregroundColor: context.componentColors.textLight,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            textStyle: TextStyles.bodyLink,
+          ),
+          onPressed: _expandReferralSource,
+          child: Text(context.strings.hearUsWhereOptionalTitle),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: Spacing.xl),
+      child: TextInputComponent(
+        label: context.strings.hearUsWhereOptionalTitle,
+        focusNode: _referralFocusNode,
+        groupId: _emailController,
+        autocorrect: false,
+        shouldUnfocusOnClearOrSubmit: true,
+        onSubmit: _isFormValid() ? (_) => _submitCreateAccount() : null,
+        onChanged: (value) {
+          _referralSource = value.trim();
+        },
+      ),
+    );
+  }
+
+  void _expandReferralSource() {
+    setState(() => _isReferralExpanded = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _referralFocusNode.requestFocus();
+    });
   }
 
   bool get _showReferralSourceField =>
@@ -258,21 +184,27 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
   String get _routeSource => widget.referralSource?.trim() ?? '';
 
   Future<void> _submitCreateAccount() async {
-    if (!_isFormValid()) {
+    if (!_isFormValid() || _isSubmitting) {
       return;
     }
-    _config.setVolatilePassword(_passwordController1.text);
-    await UserService.instance.setEmail(_email!);
-    await UserService.instance.setRefSource(
-      await _referralSourceForSubmission(),
-    );
-    if (!mounted) return;
-    await UserService.instance.sendOtt(
-      context,
-      _email!,
-      isCreateAccountScreen: true,
-      purpose: "signup",
-    );
+    final email = _email!;
+    _isSubmitting = true;
+    try {
+      _config.resetVolatilePassword();
+      await UserService.instance.setEmail(email);
+      await UserService.instance.setRefSource(
+        await _referralSourceForSubmission(),
+      );
+      if (!mounted) return;
+      await UserService.instance.sendOtt(
+        context,
+        email,
+        isCreateAccountScreen: true,
+        purpose: "signup",
+      );
+    } finally {
+      _isSubmitting = false;
+    }
   }
 
   Future<void> _updateReferralSourceFieldVisibility() async {
@@ -398,9 +330,6 @@ class _EmailEntryPageState extends State<EmailEntryPage> {
   }
 
   bool _isFormValid() {
-    return _emailIsValid &&
-        _passwordsMatch &&
-        _hasAgreedToTOS &&
-        _passwordIsValid;
+    return _emailIsValid && _hasAgreedToTOS;
   }
 }

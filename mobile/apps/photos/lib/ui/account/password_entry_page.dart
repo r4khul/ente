@@ -40,17 +40,24 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
   final _logger = Logger((_PasswordEntryPageState).toString());
   final _passwordController1 = TextEditingController();
   final _passwordController2 = TextEditingController();
+  final _passwordFieldKey = GlobalKey();
+  final _confirmPasswordFieldKey = GlobalKey();
+  final _passwordFocusNode = FocusNode();
+  final _confirmPasswordFocusNode = FocusNode();
   String? _volatilePassword;
-  String _passwordInInputBox = '';
-  String _passwordInInputConfirmationBox = '';
   double _passwordStrength = 0.0;
 
-  bool _passwordsMatch = false;
-  bool _isPasswordValid = false;
   bool _showPasswordStrength = false;
   bool _showConfirmPasswordValidation = false;
+  bool _isSettingPassword = false;
   Timer? _passwordStrengthTimer;
   Timer? _confirmPasswordTimer;
+
+  bool get _passwordsMatch =>
+      _passwordController1.text == _passwordController2.text;
+
+  bool get _isFormValid =>
+      _passwordStrength >= kMildPasswordStrengthThreshold && _passwordsMatch;
 
   @override
   void initState() {
@@ -70,6 +77,8 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
     _confirmPasswordTimer?.cancel();
     _passwordController1.dispose();
     _passwordController2.dispose();
+    _passwordFocusNode.dispose();
+    _confirmPasswordFocusNode.dispose();
     super.dispose();
   }
 
@@ -86,13 +95,32 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
       title = context.strings.recoveryKey;
     }
 
-    final isFormValid = _passwordsMatch && _isPasswordValid;
-
     if (_volatilePassword != null) {
       return OnboardingPageScaffold(
         title: title,
         illustration: OnboardingIllustration.recoveryKey,
         body: const SizedBox.shrink(),
+      );
+    }
+
+    if (widget.mode == PasswordEntryMode.set) {
+      return OnboardingPageScaffold(
+        title: title,
+        titleMaxLines: null,
+        illustration: OnboardingIllustration.password,
+        body: _getPasswordFields(),
+        actions: [
+          TextFieldTapRegion(
+            groupId: _passwordController1,
+            child: ButtonComponent(
+              key: const ValueKey("setPasswordButton"),
+              label: context.strings.continueLabel,
+              shouldShowSuccessState: false,
+              isDisabled: !_isFormValid,
+              onTap: _isFormValid ? _submitPassword : null,
+            ),
+          ),
+        ],
       );
     }
 
@@ -118,16 +146,24 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
         ),
         centerTitle: true,
       ),
-      body: _getBody(title: title, isFormValid: isFormValid),
+      body: _getBody(title: title),
     );
   }
 
   Future<void> _submitPassword() async {
-    if (!_passwordsMatch || !_isPasswordValid) {
+    if (!_isFormValid) {
       return;
     }
     if (widget.mode == PasswordEntryMode.set) {
-      await _showRecoveryCodeDialog(_passwordController1.text);
+      if (_isSettingPassword || ModalRoute.of(context)?.isCurrent == false) {
+        return;
+      }
+      _isSettingPassword = true;
+      try {
+        await _showRecoveryCodeDialog(_passwordController1.text);
+      } finally {
+        _isSettingPassword = false;
+      }
     } else {
       _updatePassword();
     }
@@ -135,15 +171,79 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
     FocusScope.of(context).unfocus();
   }
 
-  Widget _getBody({required String title, required bool isFormValid}) {
+  Widget _getBody({required String title}) {
     final colors = context.componentColors;
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 16),
+              Text(
+                context.strings.enterNewPasswordToEncrypt,
+                style: TextStyles.body.copyWith(color: colors.textLight),
+              ),
+              const SizedBox(height: 8),
+              StyledText(
+                text: context.strings.passwordWarning,
+                style: TextStyles.body.copyWith(color: colors.textLight),
+                tags: {
+                  'underline': StyledTextTag(
+                    style: TextStyles.body.copyWith(
+                      color: colors.textLight,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                },
+              ),
+              const SizedBox(height: 24),
+              _getPasswordFields(),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ButtonComponent(
+                  variant: ButtonComponentVariant.link,
+                  label: context.strings.howItWorks,
+                  size: ButtonComponentSize.small,
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (BuildContext context) {
+                          return WebPage(
+                            context.strings.howItWorks,
+                            "https://ente.com/architecture",
+                          );
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 24),
+              ButtonComponent(
+                label: title,
+                isDisabled: !_isFormValid,
+                onTap: _isFormValid ? _submitPassword : null,
+              ),
+              const SizedBox(height: 40),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _getPasswordFields() {
     final email = Configuration.instance.getEmail();
 
     String? passwordMessage;
     TextInputComponentMessageType passwordMessageType =
         TextInputComponentMessageType.helper;
 
-    if (_passwordInInputBox.isNotEmpty && _showPasswordStrength) {
+    if (_showPasswordStrength) {
       if (_passwordStrength > kStrongPasswordStrengthThreshold) {
         passwordMessage = context.strings.strongPassword;
         passwordMessageType = TextInputComponentMessageType.success;
@@ -160,9 +260,8 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
     TextInputComponentMessageType confirmPasswordMessageType =
         TextInputComponentMessageType.helper;
 
-    if (_passwordInInputConfirmationBox.isNotEmpty &&
-        _passwordInInputBox.isNotEmpty &&
-        _showConfirmPasswordValidation) {
+    if (_showConfirmPasswordValidation &&
+        _passwordController1.text.isNotEmpty) {
       if (_passwordsMatch) {
         confirmPasswordMessage = context.strings.passwordsMatch;
         confirmPasswordMessageType = TextInputComponentMessageType.success;
@@ -172,152 +271,109 @@ class _PasswordEntryPageState extends State<PasswordEntryPage> {
       }
     }
 
-    return SafeArea(
-      child: SingleChildScrollView(
-        child: AutofillGroup(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 16),
-                Text(
-                  widget.mode == PasswordEntryMode.set
-                      ? context.strings.enterPasswordToEncrypt
-                      : context.strings.enterNewPasswordToEncrypt,
-                  style: TextStyles.body.copyWith(color: colors.textLight),
-                ),
-                const SizedBox(height: 8),
-                StyledText(
-                  text: context.strings.passwordWarning,
-                  style: TextStyles.body.copyWith(color: colors.textLight),
-                  tags: {
-                    'underline': StyledTextTag(
-                      style: TextStyles.body.copyWith(
-                        color: colors.textLight,
-                        decoration: TextDecoration.underline,
-                      ),
-                    ),
-                  },
-                ),
-                const SizedBox(height: 24),
-                Visibility(
-                  visible: false,
-                  child: TextFormField(
-                    autofillHints: const [AutofillHints.email],
-                    autocorrect: false,
-                    keyboardType: TextInputType.emailAddress,
-                    initialValue: email,
-                    textInputAction: TextInputAction.next,
-                  ),
-                ),
-                TextInputComponent(
-                  label: context.strings.password,
-                  hintText: context.strings.password,
-                  controller: _passwordController1,
-                  isPasswordInput: true,
-                  isRequired: true,
-                  autocorrect: false,
-                  autofillHints: const [AutofillHints.newPassword],
-                  message: passwordMessage,
-                  messageType: passwordMessageType,
-                  onChanged: (password) {
-                    _passwordStrengthTimer?.cancel();
-                    setState(() {
-                      _passwordInInputBox = password;
-                      _passwordStrength = estimatePasswordStrength(password);
-                      _isPasswordValid =
-                          _passwordStrength >= kMildPasswordStrengthThreshold;
-                      _passwordsMatch =
-                          _passwordInInputBox ==
-                          _passwordInInputConfirmationBox;
-                      _showPasswordStrength = false;
-                    });
-                    _passwordStrengthTimer = Timer(
-                      const Duration(seconds: 1),
-                      () {
-                        if (mounted) {
-                          setState(() {
-                            _showPasswordStrength = true;
-                          });
-                        }
-                      },
-                    );
-                  },
-                ),
-                const SizedBox(height: 16),
-                TextInputComponent(
-                  label: context.strings.confirmPassword,
-                  hintText: context.strings.confirmPassword,
-                  controller: _passwordController2,
-                  isPasswordInput: true,
-                  isRequired: true,
-                  autocorrect: false,
-                  autofillHints: const [],
-                  finishAutofillContextOnEditingComplete: true,
-                  shouldUnfocusOnClearOrSubmit: true,
-                  onSubmit: _passwordsMatch && _isPasswordValid
-                      ? (_) => _submitPassword()
-                      : null,
-                  message: confirmPasswordMessage,
-                  messageType: confirmPasswordMessageType,
-                  onChanged: (cnfPassword) {
-                    _confirmPasswordTimer?.cancel();
-                    setState(() {
-                      _passwordInInputConfirmationBox = cnfPassword;
-                      _showConfirmPasswordValidation = false;
-                      if (_passwordInInputBox.isNotEmpty) {
-                        _passwordsMatch =
-                            _passwordInInputBox ==
-                            _passwordInInputConfirmationBox;
-                      }
-                    });
-                    _confirmPasswordTimer = Timer(
-                      const Duration(seconds: 1),
-                      () {
-                        if (mounted) {
-                          setState(() {
-                            _showConfirmPasswordValidation = true;
-                          });
-                        }
-                      },
-                    );
-                  },
-                ),
-                const SizedBox(height: 16),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: ButtonComponent(
-                    variant: ButtonComponentVariant.link,
-                    label: context.strings.howItWorks,
-                    size: ButtonComponentSize.small,
-                    onTap: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (BuildContext context) {
-                            return WebPage(
-                              context.strings.howItWorks,
-                              "https://ente.com/architecture",
-                            );
-                          },
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 24),
-                ButtonComponent(
-                  label: title,
-                  isDisabled: !isFormValid,
-                  onTap: isFormValid ? _submitPassword : null,
-                ),
-                const SizedBox(height: 40),
-              ],
+    return AutofillGroup(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Visibility(
+            visible: false,
+            maintainState: true,
+            child: TextFormField(
+              autofillHints: const [AutofillHints.email],
+              autocorrect: false,
+              keyboardType: TextInputType.emailAddress,
+              initialValue: email,
+              textInputAction: TextInputAction.next,
             ),
           ),
-        ),
+          TextInputComponent(
+            key: _passwordFieldKey,
+            label: context.strings.password,
+            hintText: context.strings.password,
+            controller: _passwordController1,
+            focusNode: _passwordFocusNode,
+            groupId: _passwordController1,
+            textInputAction: TextInputAction.next,
+            isPasswordInput: true,
+            isRequired: true,
+            autocorrect: false,
+            autofillHints: const [AutofillHints.newPassword],
+            message: passwordMessage,
+            messageType: passwordMessageType,
+            onChanged: (password) {
+              _passwordStrengthTimer?.cancel();
+              setState(() {
+                _passwordStrength = estimatePasswordStrength(password);
+                if (password.isEmpty) _showPasswordStrength = false;
+              });
+              if (password.isEmpty || _showPasswordStrength) return;
+              _passwordStrengthTimer = Timer(const Duration(seconds: 1), () {
+                if (mounted) {
+                  setState(() {
+                    _showPasswordStrength = true;
+                  });
+                  _revealMessage(_passwordFieldKey, _passwordFocusNode);
+                }
+              });
+            },
+          ),
+          const SizedBox(height: 16),
+          TextInputComponent(
+            key: _confirmPasswordFieldKey,
+            label: context.strings.confirmPassword,
+            hintText: context.strings.confirmPassword,
+            controller: _passwordController2,
+            focusNode: _confirmPasswordFocusNode,
+            groupId: _passwordController1,
+            isPasswordInput: true,
+            isRequired: true,
+            autocorrect: false,
+            autofillHints: const [],
+            finishAutofillContextOnEditingComplete: true,
+            shouldUnfocusOnClearOrSubmit: true,
+            onSubmit: _isFormValid ? (_) => _submitPassword() : null,
+            message: confirmPasswordMessage,
+            messageType: confirmPasswordMessageType,
+            onChanged: (confirmation) {
+              _confirmPasswordTimer?.cancel();
+              setState(() {
+                if (confirmation.isEmpty) {
+                  _showConfirmPasswordValidation = false;
+                }
+              });
+              if (confirmation.isEmpty || _showConfirmPasswordValidation) {
+                return;
+              }
+              _confirmPasswordTimer = Timer(const Duration(seconds: 1), () {
+                if (mounted) {
+                  setState(() {
+                    _showConfirmPasswordValidation = true;
+                  });
+                  _revealMessage(
+                    _confirmPasswordFieldKey,
+                    _confirmPasswordFocusNode,
+                  );
+                }
+              });
+            },
+          ),
+        ],
       ),
     );
+  }
+
+  void _revealMessage(GlobalKey fieldKey, FocusNode focusNode) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final fieldContext = fieldKey.currentContext;
+      if (fieldContext == null || !focusNode.hasFocus) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          fieldContext,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+        ),
+      );
+    });
   }
 
   void _updatePassword() async {

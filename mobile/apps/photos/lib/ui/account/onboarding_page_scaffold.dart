@@ -11,7 +11,6 @@ import "package:rive/rive.dart" as rive;
 
 enum OnboardingIllustration {
   login("assets/onboarding_login.riv", 0.535, -30.8, 3.9),
-  signUp("assets/onboarding_login.riv", 0.44, -53.9, 3.6),
   email("assets/onboarding_email.riv", 0.533, -25.8, 13.5),
   password("assets/onboarding_password.riv", 0.5289, -36.2, -2.1),
   forgotPassword("assets/onboarding_forgot_password.riv", 0.5294, -28.5, -6.1),
@@ -52,6 +51,7 @@ class OnboardingPageScaffold extends StatefulWidget {
     this.showBackButton = true,
     this.titleBarStyle = OnboardingTitleBarStyle.card,
     this.headerTrailing,
+    this.titleMaxLines = 2,
     this.titleTopPadding,
     this.isBodyCentered = false,
     this.pinActions = false,
@@ -74,6 +74,7 @@ class OnboardingPageScaffold extends StatefulWidget {
   final bool showBackButton;
   final OnboardingTitleBarStyle titleBarStyle;
   final Widget? headerTrailing;
+  final int? titleMaxLines;
   final double? titleTopPadding;
   final bool isBodyCentered;
 
@@ -98,6 +99,7 @@ class OnboardingPageScaffoldState extends State<OnboardingPageScaffold> {
   static const double _headerBarCenter = 33;
   static const double _headerBarLeftInset = 10;
   static const double _headerBarRightInset = 11;
+  static const double _minimumVisibleHeaderHeight = 48;
   static const double _footerSpacing = Spacing.lg;
   static const double _footerInset = Spacing.xxl;
 
@@ -391,10 +393,15 @@ class OnboardingPageScaffoldState extends State<OnboardingPageScaffold> {
                           _titleBarHeight,
                     ),
                   );
-            final keyboardHeaderHeight = availableHeaderHeight.clamp(
+            final fittedHeaderHeight = availableHeaderHeight.clamp(
               minimumHeaderHeight,
               widget.headerHeight,
             );
+            final keyboardHeaderHeight =
+                widget.titleBarStyle == OnboardingTitleBarStyle.card &&
+                    fittedHeaderHeight < _minimumVisibleHeaderHeight
+                ? 0.0
+                : fittedHeaderHeight;
             final headerHeight =
                 mediaQuery.padding.top +
                 (isKeyboardOpen ? keyboardHeaderHeight : widget.headerHeight);
@@ -599,8 +606,10 @@ class OnboardingPageScaffoldState extends State<OnboardingPageScaffold> {
     final title = Text(
       widget.title,
       textAlign: TextAlign.center,
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
+      maxLines: widget.titleMaxLines,
+      overflow: widget.titleMaxLines == null
+          ? TextOverflow.clip
+          : TextOverflow.ellipsis,
       style: TextStyles.display2.copyWith(color: colors.textBase),
     );
     final titleContent = widget.showDeveloperSettingsTapArea

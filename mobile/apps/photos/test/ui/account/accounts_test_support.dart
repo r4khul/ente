@@ -67,6 +67,15 @@ class FakeAccountsClient extends Fake implements AccountsClient {
     requests.add({"email": email, "code": code});
     throw failure ?? UnimplementedError();
   }
+
+  @override
+  Future<SignupKeys> generateSignupKeys({
+    required String password,
+    required String srpUserId,
+  }) async {
+    requests.add({"password": password});
+    throw failure ?? UnimplementedError();
+  }
 }
 
 class _FakePhotosRustApi extends Fake implements EntePhotosRustApi {
