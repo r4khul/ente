@@ -8,6 +8,7 @@ class ImageEditorAdjustSlider extends StatelessWidget {
     required this.max,
     required this.value,
     required this.onChanged,
+    this.onChangeStart,
     this.onChangeEnd,
   });
 
@@ -15,6 +16,7 @@ class ImageEditorAdjustSlider extends StatelessWidget {
   final double max;
   final double value;
   final ValueChanged<double> onChanged;
+  final ValueChanged<double>? onChangeStart;
   final ValueChanged<double>? onChangeEnd;
 
   @override
@@ -49,6 +51,7 @@ class ImageEditorAdjustSlider extends StatelessWidget {
               child: Slider(
                 value: value,
                 onChanged: onChanged,
+                onChangeStart: onChangeStart,
                 onChangeEnd: onChangeEnd,
                 min: min,
                 max: max,

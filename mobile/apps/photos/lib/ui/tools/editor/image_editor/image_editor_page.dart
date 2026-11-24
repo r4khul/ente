@@ -310,6 +310,13 @@ class _ImageEditorPageState extends State<ImageEditorPage> {
                   }
                 },
                 onStartCloseSubEditor: (value) {
+                  if (value == SubEditor.cropRotate) {
+                    final crop =
+                        editorKey.currentState?.cropRotateEditor.currentState;
+                    if (crop != null) {
+                      ImageEditorStraightenGrid.setVisible(crop, false);
+                    }
+                  }
                   _mainEditorBarKey.currentState?.setState(() {});
                 },
                 onPopInvoked: (didPop, result) {
@@ -460,9 +467,19 @@ class _ImageEditorPageState extends State<ImageEditorPage> {
                 style: CropRotateEditorStyle(
                   background: colors.backgroundBase,
                   cropCornerColor: colors.primary,
+                  helperLineColor: colors.specialWhite,
+                  helperLineWidth: 1,
                   uiOverlayStyle: editorUiOverlayStyle,
                 ),
                 widgets: CropRotateEditorWidgets(
+                  bodyItems: (editor, stream) => [
+                    ReactiveWidget(
+                      stream: stream,
+                      builder: (_) => Positioned.fill(
+                        child: ImageEditorStraightenGrid(editor: editor),
+                      ),
+                    ),
+                  ],
                   appBar: (editor, rebuildStream) {
                     return ReactiveAppbar(
                       builder: (context) {

@@ -1,0 +1,1 @@
+- Added alignment guides while straightening a photo.
