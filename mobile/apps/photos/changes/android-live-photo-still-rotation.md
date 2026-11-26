@@ -1,0 +1,1 @@
+- Fixed some iPhone Live Photos appearing upside down or sideways on Android.
