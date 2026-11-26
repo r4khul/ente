@@ -200,6 +200,7 @@ void main() {
 
     submitNotifier.value++;
     await tester.pump();
+    await tester.pump(Motion.quick);
 
     expect(
       _fieldDecoration(tester).border?.top.color,
