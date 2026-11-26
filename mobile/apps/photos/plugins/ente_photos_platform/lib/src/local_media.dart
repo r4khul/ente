@@ -11,4 +11,10 @@ class LocalMediaClient {
       'localID': localID,
     });
   }
+
+  Future<int?> missingHeicRotation(String path) {
+    return _methodChannel.invokeMethod<int>('localMedia.missingHeicRotation', {
+      'path': path,
+    });
+  }
 }
