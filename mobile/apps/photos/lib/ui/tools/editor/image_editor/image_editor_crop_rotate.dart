@@ -14,6 +14,7 @@ import "package:photos/ui/tools/editor/image_editor/image_editor_tune_bar.dart";
 import 'package:pro_image_editor/core/mixins/converted_configs.dart';
 import 'package:pro_image_editor/features/crop_rotate_editor/providers/tilt_provider.dart';
 import 'package:pro_image_editor/features/crop_rotate_editor/utils/crop_aspect_ratios.dart';
+import 'package:pro_image_editor/features/crop_rotate_editor/widgets/crop_corner_painter.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
 
 enum CropAspectRatioType {
@@ -212,6 +213,10 @@ class _ImageEditorCropRotateBarState extends State<ImageEditorCropRotateBar>
                     label: context.strings.crop,
                     isSelected: selectedControl == _CropControl.crop,
                     onTap: () => setState(() {
+                      ImageEditorStraightenGrid.setVisible(
+                        widget.editor,
+                        false,
+                      );
                       selectedControl = selectedControl == _CropControl.crop
                           ? _CropControl.none
                           : _CropControl.crop;
@@ -275,13 +280,22 @@ class _ImageEditorCropRotateBarState extends State<ImageEditorCropRotateBar>
                       tiltConfigs.tiltRotateMin,
                       tiltConfigs.tiltRotateMax,
                     ),
+                    onChangeStart: (_) => ImageEditorStraightenGrid.setVisible(
+                      widget.editor,
+                      true,
+                    ),
                     onChanged: (value) => widget.editor.tilt(
                       TiltMode.rotate,
                       value * pi / 180,
                       updateStateHistory: false,
                     ),
-                    onChangeEnd: (value) =>
-                        widget.editor.tilt(TiltMode.rotate, value * pi / 180),
+                    onChangeEnd: (value) {
+                      ImageEditorStraightenGrid.setVisible(
+                        widget.editor,
+                        false,
+                      );
+                      widget.editor.tilt(TiltMode.rotate, value * pi / 180);
+                    },
                   ),
                 )
               else if (selectedControl == _CropControl.crop)
@@ -315,6 +329,115 @@ class _ImageEditorCropRotateBarState extends State<ImageEditorCropRotateBar>
       ),
     );
   }
+}
+
+class ImageEditorStraightenGrid extends StatefulWidget {
+  ImageEditorStraightenGrid({required this.editor}) : super(key: _key(editor));
+
+  final CropRotateEditorState editor;
+
+  static GlobalObjectKey<_ImageEditorStraightenGridState> _key(
+    CropRotateEditorState editor,
+  ) => GlobalObjectKey(editor);
+
+  static void setVisible(CropRotateEditorState editor, bool visible) {
+    _key(editor).currentState?._setVisible(visible);
+  }
+
+  @override
+  State<ImageEditorStraightenGrid> createState() =>
+      _ImageEditorStraightenGridState();
+}
+
+class _ImageEditorStraightenGridState extends State<ImageEditorStraightenGrid>
+    with SingleTickerProviderStateMixin {
+  late final _repaint = AnimationController(vsync: this);
+
+  void _setVisible(bool visible) {
+    if (_repaint.isAnimating == visible) return;
+    if (visible) {
+      // The crop frame can repaint independently while a gesture is active.
+      _repaint.repeat(period: const Duration(seconds: 1));
+    } else {
+      _repaint.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _repaint.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: RepaintBoundary(
+      child: CustomPaint(
+        painter: _StraightenGridPainter(
+          widget.editor,
+          context,
+          context.componentColors.specialWhite,
+          _repaint,
+        ),
+      ),
+    ),
+  );
+}
+
+class _StraightenGridPainter extends CustomPainter {
+  _StraightenGridPainter(this.editor, this.context, this.color, this.repaint)
+    : super(repaint: repaint);
+
+  final CropRotateEditorState editor;
+  final BuildContext context;
+  final Color color;
+  final AnimationController repaint;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!repaint.isAnimating) return;
+    final crop = editor.cropPainterKey.currentState;
+    final painter = crop?.foregroundPainter;
+    if (crop == null || painter is! CropCornerPainter) return;
+
+    final rect = painter.cropRect;
+    final opacity = painter.fadeInOpacity * painter.frameOpacity;
+    if (rect.isEmpty || !rect.isFinite || opacity <= 0) return;
+
+    final cropBox = crop.context.findRenderObject();
+    final gridBox = context.findRenderObject();
+    if (cropBox is! RenderBox || !cropBox.attached || gridBox is! RenderBox) {
+      return;
+    }
+
+    final transform = cropBox.getTransformTo(gridBox).storage;
+    final lines = Path();
+    const divisions = 6;
+    for (var i = 1; i < divisions; i++) {
+      final x = rect.left + rect.width * i / divisions;
+      final y = rect.top + rect.height * i / divisions;
+      lines
+        ..moveTo(x, rect.top)
+        ..lineTo(x, rect.bottom)
+        ..moveTo(rect.left, y)
+        ..lineTo(rect.right, y);
+    }
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    canvas.clipPath((Path()..addRect(rect)).transform(transform));
+    canvas.drawPath(
+      lines.transform(transform),
+      Paint()
+        ..color = color.withValues(alpha: color.a * opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_StraightenGridPainter oldDelegate) =>
+      editor != oldDelegate.editor || color != oldDelegate.color;
 }
 
 class CropAspectChip extends StatelessWidget {
