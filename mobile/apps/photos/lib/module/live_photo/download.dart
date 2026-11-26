@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:ente_photos_platform/ente_photos_platform.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:logging/logging.dart';
@@ -66,9 +67,25 @@ Future<File> _cacheImagePart(EnteFile file, LivePhotoArchivePart part) async {
   File imageFile = part.file;
   if (fileExtension == 'unknown' ||
       (Platform.isAndroid && fileExtension == 'heic')) {
+    // The converter follows EXIF alone, which can miss a HEIC's own rotation.
+    int? rotation;
+    if (Platform.isAndroid) {
+      try {
+        rotation = await LocalMediaClient.instance.missingHeicRotation(
+          imageFile.path,
+        );
+      } catch (error, stackTrace) {
+        _logger.warning('Failed to read HEIC rotation', error, stackTrace);
+      }
+    }
+    final isQuarterTurn = rotation == 90 || rotation == 270;
     final compressResult = await FlutterImageCompress.compressAndGetFile(
       imageFile.path,
       '${imageFile.path}.jpg',
+      minWidth: isQuarterTurn ? 1080 : 1920,
+      minHeight: isQuarterTurn ? 1920 : 1080,
+      rotate: rotation ?? 0,
+      autoCorrectionAngle: rotation == null,
       keepExif: true,
     );
     if (compressResult == null) {
